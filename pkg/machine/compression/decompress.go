@@ -26,6 +26,7 @@ type decompressor interface {
 	compressedFileMode() os.FileMode
 	compressedFileReader() (io.ReadCloser, error)
 	decompress(w WriteSeekCloser, r io.Reader) error
+	decompressSparse(w WriteSeekCloser, r io.Reader) error
 	close()
 }
 
@@ -44,7 +45,25 @@ func Decompress(compressedVMFile *define.VMFile, decompressedFilePath string) er
 		return err
 	}
 
-	return runDecompression(d, decompressedFilePath)
+	return runDecompression(d, decompressedFilePath, false)
+}
+
+func DecompressSparse(compressedVMFile *define.VMFile, decompressedFilePath string) error {
+	compressedFilePath := compressedVMFile.GetPath()
+	// Are we reading full image file?
+	// Only few bytes are read to detect
+	// the compression type
+	compressedFileContent, err := compressedVMFile.Read()
+	if err != nil {
+		return err
+	}
+
+	var d decompressor
+	if d, err = newDecompressor(compressedFilePath, compressedFileContent); err != nil {
+		return err
+	}
+
+	return runDecompression(d, decompressedFilePath, true)
 }
 
 func newDecompressor(compressedFilePath string, compressedFileContent []byte) (decompressor, error) {
@@ -72,7 +91,7 @@ func newDecompressor(compressedFilePath string, compressedFileContent []byte) (d
 	}
 }
 
-func runDecompression(d decompressor, decompressedFilePath string) error {
+func runDecompression(d decompressor, decompressedFilePath string, sparse bool) error {
 	compressedFileReader, err := d.compressedFileReader()
 	if err != nil {
 		return err
@@ -104,9 +123,16 @@ func runDecompression(d decompressor, decompressedFilePath string) error {
 		}
 	}()
 
-	if err = d.decompress(decompressedFileWriter, compressedFileReaderProxy); err != nil {
-		logrus.Errorf("Error extracting compressed file: %q", err)
-		return err
+	if sparse {
+		if err = d.decompressSparse(decompressedFileWriter, compressedFileReaderProxy); err != nil {
+			logrus.Errorf("Error extracting compressed file in sparse mode: %q", err)
+			return err
+		}
+	} else {
+		if err = d.decompress(decompressedFileWriter, compressedFileReaderProxy); err != nil {
+			logrus.Errorf("Error extracting compressed file: %q", err)
+			return err
+		}
 	}
 
 	return nil

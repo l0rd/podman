@@ -23,6 +23,17 @@ func (d *zstdDecompressor) decompress(w WriteSeekCloser, r io.Reader) error {
 	}
 	defer zstdReader.Close()
 
+	_, err = io.Copy(w, zstdReader)
+	return err
+}
+
+func (d *zstdDecompressor) decompressSparse(w WriteSeekCloser, r io.Reader) error {
+	zstdReader, err := zstd.NewReader(r)
+	if err != nil {
+		return err
+	}
+	defer zstdReader.Close()
+
 	sparseWriter := NewSparseWriter(w)
 	defer func() {
 		if err := sparseWriter.Close(); err != nil {

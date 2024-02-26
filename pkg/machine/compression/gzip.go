@@ -27,6 +27,21 @@ func (d *gzipDecompressor) decompress(w WriteSeekCloser, r io.Reader) error {
 		}
 	}()
 
+	_, err = io.Copy(w, gzReader)
+	return err
+}
+
+func (d *gzipDecompressor) decompressSparse(w WriteSeekCloser, r io.Reader) error {
+	gzReader, err := image.GzipDecompressor(r)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := gzReader.Close(); err != nil {
+			logrus.Errorf("Unable to close gz file: %q", err)
+		}
+	}()
+
 	sparseWriter := NewSparseWriter(w)
 	defer func() {
 		if err := sparseWriter.Close(); err != nil {

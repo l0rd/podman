@@ -16,6 +16,11 @@ func newUncompressedDecompressor(compressedFilePath string) (*uncompressedDecomp
 }
 
 func (d *uncompressedDecompressor) decompress(w WriteSeekCloser, r io.Reader) error {
+	_, err := io.Copy(w, r)
+	return err
+}
+
+func (d *uncompressedDecompressor) decompressSparse(w WriteSeekCloser, r io.Reader) error {
 	sparseWriter := NewSparseWriter(w)
 	defer func() {
 		if err := sparseWriter.Close(); err != nil {
