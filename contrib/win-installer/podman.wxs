@@ -20,6 +20,7 @@
     <Media Id="1" Cabinet="Podman.cab" EmbedCab="yes"/>
     <MajorUpgrade AllowDowngrades="yes"/>
     <Property Id="DiskPrompt" Value="Red Hat's Podman $(var.VERSION) Installation"/>
+    <Property Id="MACHINE_PROVIDER" Value="wsl"/>
     <SetProperty Id="WSL_INSTALL" Before="AppSearch" Value="1" Sequence="first">NOT (WITH_WSL = 0)</SetProperty>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder" Name="PFiles">
@@ -45,6 +46,45 @@
             <Component Id="GuideHTMLComponent" Guid="8B23C76B-F7D4-4030-8C46-1B5729E616B5" Win64="yes">
               <File Id="GuideHTMLFile"  Name="welcome-podman.html" Source="docs/podman-for-windows.html" KeyPath="yes"/>
             </Component>
+          </Directory>
+        </Directory>
+        <!-- AppDataFolder -->
+        <!-- <Directory Id="AppDataFolder">
+          <Directory Id="CONFIGDIR" Name="containers">
+            <Component Id="ContainersConfDir_Component" Guid="CAB35779-F8DE-4584-872E-5831BC48C642">
+              <CreateFolder/>
+              <RemoveFolder Id="RemoveContainersConfDir" On="uninstall"/>
+              <RegistryKey Root="HKCU" Key="SOFTWARE\Red Hat\Podman">
+                <RegistryValue Name="ContainersConfDir" Value="[CONFIGDIR]" Type="string" KeyPath="yes" />
+              </RegistryKey>
+            </Component>
+            <Directory Id="ContainersConfigSubDir" Name="containers.conf.d">
+              <Component Id="ContainersConfigSubDir_Component" Guid="D26E0C71-99B7-48DE-8BC0-C9B36FF8558B">
+                <CreateFolder/>
+                <RemoveFolder Id="RemoveContainersConfigSubDir" On="uninstall"/>
+                <RegistryKey Root="HKCU" Key="SOFTWARE\Red Hat\Podman">
+                  <RegistryValue Name="ContainersConfigSubDir" Value="[CONFIGDIR]containers.conf.d" Type="string" KeyPath="yes" />
+                </RegistryKey>
+              </Component>
+              <Component Id="MachineProviderConfigFile" Guid="C32C0040-D9AF-4155-AC7E-465B63B6BE3B">
+                <File Id="MachineProviderConfigFile" Source="artifacts\99-podman-machine-provider.conf"/>
+                <RegistryKey Root="HKCU" Key="SOFTWARE\Red Hat\Podman">
+                  <RegistryValue Name="PodmanMachineProviderConfFile" Value="99-podman-machine-provider.conf" Type="string" KeyPath="yes" />
+                </RegistryKey>
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory> -->
+        <!-- CommonAppDataFolder -->
+        <Directory Id="CommonAppDataFolder">
+          <Directory Id="CONFIGDIR" Name="containers">
+            <Directory Id="ContainersConfigSubDir" Name="containers.conf.d">
+              <Component Id="MachineProviderConfigFile" Guid="C32C0040-D9AF-4155-AC7E-465B63B6BE3B">
+                <!-- <File Id="MachineProviderConfigFile" Source="artifacts\99-podman-machine-provider.conf" KeyPath="yes"/> -->
+                <CreateFolder />
+                <IniFile Id="MachineProviderConfigFile" Action="createLine" Directory="ContainersConfigSubDir" Section="machine" Name="99-podman-machine-provider.conf" Key="provider" Value='"[MACHINE_PROVIDER]"' />
+              </Component>
+            </Directory>
           </Directory>
         </Directory>
       </Directory>
@@ -76,6 +116,9 @@
       <ComponentRef Id="GvProxyExecutable"/>
       <?endif?>
       <ComponentRef Id="GuideHTMLComponent"/>
+      <!-- <ComponentRef Id="ContainersConfDir_Component"/>
+      <ComponentRef Id="ContainersConfigSubDir_Component"/> -->
+      <ComponentRef Id="MachineProviderConfigFile"/>
       <ComponentGroupRef Id="ManFiles"/>
       <ComponentGroupRef Id="WSLFeature"/>
     </Feature>
