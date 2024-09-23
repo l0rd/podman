@@ -1,0 +1,14 @@
+{
+	"name": "podman-devcontainer",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/go:1": {}
+	},
+
+	"containerEnv": {
+		"HOME": "/home/vscode"
+	}
+}
