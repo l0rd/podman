@@ -431,6 +431,9 @@ qe ssh://root@podman.test:2222/run/podman/podman.sock ~/.ssh/id_rsa false true
 			SkipIfNotRootless(fmt.Sprintf("FIXME: set up ssh keys when root. uid(%d) euid(%d)", os.Getuid(), os.Geteuid()))
 			SkipIfSystemdNotRunning("cannot test connection heuristic if systemd is not running")
 			SkipIfNotActive("sshd", "cannot test connection heuristic if sshd is not running")
+			// FIXME: we should also check that ~/.ssh/id_ed25519 and ~/.ssh/id_ed25519.pub exist
+			//        and that ~/.ssh/id_ed25519.pub is in ~/.ssh/authorized_keys otherwise the
+			//        are going to fail
 		})
 
 		It("add ssh:// socket path using connection heuristic", func() {
@@ -450,7 +453,7 @@ qe ssh://root@podman.test:2222/run/podman/podman.sock ~/.ssh/id_rsa false true
 			cmd := exec.Command(podmanTest.RemotePodmanBinary,
 				"system", "connection", "add",
 				"--default",
-				"--identity", filepath.Join(u.HomeDir, ".ssh", "id_ed25519"),
+				// "--identity", filepath.Join(u.HomeDir, ".ssh", "id_ed25519"),
 				"QA",
 				fmt.Sprintf("ssh://%s@localhost", u.Username))
 
@@ -487,6 +490,72 @@ qe ssh://root@podman.test:2222/run/podman/podman.sock ~/.ssh/id_rsa false true
 			lsSession.Wait(DefaultWaitTimeout)
 			Expect(lsSession).Should(Exit(0))
 			Expect(string(lsSession.Out.Contents())).To(Equal("QA " + uri.String() + " " + filepath.Join(u.HomeDir, ".ssh", "id_ed25519") + " true true\n"))
+		})
+
+		It("add ssh:// when a known_hosts file exist", func() {
+			u, err := user.Current()
+			Expect(err).ShouldNot(HaveOccurred())
+
+			// Ensure that the remote end uses our built podman
+			if os.Getenv("PODMAN_BINARY") == "" {
+				err = os.Setenv("PODMAN_BINARY", podmanTest.PodmanBinary)
+				Expect(err).ShouldNot(HaveOccurred())
+				defer os.Unsetenv("PODMAN_BINARY")
+			}
+
+			// FIXME Mario create these known_hosts files in a temp dir:
+			//  one with line matching the host, the key and algo: OK
+			//  one with line matching the host, but not the key and not the algo: OK
+			//  one with line matching the host and the algo, but not the key: KO
+			//    ssh-keyscan -H localhost -t rsa
+			//    ssh-keyscan -H localhost -t ed25519
+			//  and change HOME to the temp dir before executing the command
+			knownhosts := []string{
+				`# localhost:22 SSH-2.0-OpenSSH_9.6
+localhost ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINHPAJ0CX01iuX/dDxXThvdBN/vkWTpNhqEhyi9rWKkz`,
+				`# localhost:22 SSH-2.0-OpenSSH_9.6
+localhost ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCwQFQvjD0Tmb3TI5x9RwUiQVKJj4J4dZV8OVSA/EZMMh1s51lNlePBWu4F4s2GGpM3YGu1kkSXVKB9CPtpc+LbcPHtZsU0Wck2LFzVnc21fZ5xRkjbULeWLBuRrysW8FL8bh4IN2mlldpgohK5e9cJGIp0IykOSq0P64bYDtsj2rNtE73n9vLawkscJ+iIBjRsD4OEQCNOptFRpZXw2kSxYFuaGRaJfBKE1Kbj8yGTw1duDsMhlnXUBCHwsbh6iCLv7tmvcBwGfve+wcFIktUYLIfShKJ0uOqmJ17mUlmZnUYV1vq1siA4GZzUDmm1WdCVNlViFGtrcXaIr7lQefxH8PpynrT5LeJFblhivzJkqQFSPqTTIaIjSU8w+wArXoQ/+ld+zklu62t+r6dHR3LLmngeehnFMfCdfUEO6xihSSnqPA0f4zyjUEccHaCViUjtwWwqEWun4ZHZf+gR3eNYk2L1bVwBuHbza2uk1v65UzTzd/jycKOfyLggQjVPUoc=`,
+				`# localhost:22 SSH-2.0-OpenSSH_9.6
+localhost ssh-rsa MIGeMA0GCSqGSIb3DQEBAQUAA4GMADCBiAKBgGjVl/enP2n/7et0b0rTHFzamoU2UzMpd5WSSW/Ac94yjjNdUbdsQ7pDHrifgtaU+LqqTc1Ty07xDtSIirxxxTspnlnGTyED0zl4V2VwH6ppU8EqvmAAd/YdlzH5UtlMsPo3uHr/f2kULdSELzdls9ascNFeL9PonJ3E7tHb0utXAgMBAAE=`}
+
+			for _, knownhost := range knownhosts {
+				tempHome, err := os.MkdirTemp("", "known_hosts-*")
+				Expect(err).ToNot(HaveOccurred())
+				defer Expect(os.RemoveAll(tempHome)).To(Succeed())
+				
+				tempSSHDir := filepath.Join(tempHome, ".ssh")
+				err = os.Mkdir(tempSSHDir, 0700)
+				Expect(err).ToNot(HaveOccurred())
+
+				khFilePath := filepath.Join(tempSSHDir, "known_hosts")
+				khFile, err := os.Create(khFilePath)
+				Expect(err).ToNot(HaveOccurred())
+				defer khFile.Close()
+				defer os.Remove(khFilePath)
+
+				err = os.WriteFile(khFilePath, []byte(knownhost), 0600)
+				Expect(err).ToNot(HaveOccurred())
+
+				err = os.Setenv("HOME", tempHome)
+				Expect(err).ToNot(HaveOccurred())
+				cmd := exec.Command(podmanTest.RemotePodmanBinary,
+					"system", "connection", "add",
+					"--default",
+					"--identity", filepath.Join(u.HomeDir, ".ssh", "id_ed25519"),
+					"QA",
+					fmt.Sprintf("ssh://%s@localhost", u.Username))
+				session, err := Start(cmd, GinkgoWriter, GinkgoWriter)
+				Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("%q failed to execute", podmanTest.RemotePodmanBinary))
+				Eventually(session, DefaultWaitTimeout).Should(Exit(0))
+				Expect(session.Out.Contents()).Should(BeEmpty())
+				Expect(session.Err.Contents()).Should(BeEmpty())
+
+				cmd = exec.Command(podmanTest.RemotePodmanBinary,
+					"--connection", "QA", "ps")
+				_, err = Start(cmd, GinkgoWriter, GinkgoWriter)
+				Expect(err).ToNot(HaveOccurred())
+
+			}
 		})
 	})
 })

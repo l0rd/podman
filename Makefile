@@ -653,7 +653,7 @@ test: localunit localintegration remoteintegration localsystem remotesystem  ## 
 ginkgo-run: PATH := $(PATH):$(CURDIR)/hack
 ginkgo-run: .install.ginkgo
 	$(GINKGO) version
-	$(GINKGO) -vv $(TESTFLAGS) --tags "$(TAGS) remote" $(GINKGOTIMEOUT) --flake-attempts $(GINKGO_FLAKE_ATTEMPTS) \
+	$(GINKGO) $(TESTFLAGS) --tags "$(TAGS) remote" $(GINKGOTIMEOUT) --flake-attempts $(GINKGO_FLAKE_ATTEMPTS) \
 		--trace $(if $(findstring y,$(GINKGO_NO_COLOR)),--no-color,) \
 		$(if $(findstring y,$(GINKGO_PARALLEL)),-p,) $(if $(FOCUS),--focus "$(FOCUS)",) \
 		$(if $(FOCUS_FILE),--focus-file "$(FOCUS_FILE)",) $(GINKGOWHAT)
