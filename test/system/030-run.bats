@@ -518,9 +518,9 @@ json-file | f
     is "$output" "Sun Sep 13 12:26:40 UTC 2020" "podman run with no TZ"
 
     # Multiple --tz options; confirm that the last one wins
-    run_podman run --rm --tz=US/Eastern --tz=Iceland --tz=MST7MDT \
+    run_podman run --rm --tz=US/Eastern --tz=Iceland --tz=America/New_York \
                $IMAGE date -r $testfile
-    is "$output" "Sun Sep 13 06:26:40 MDT 2020" "podman run with --tz=MST7MDT"
+    is "$output" "Sun Sep 13 08:26:40 EDT 2020" "podman run with --tz=America/New_York"
 
     # --tz=local pays attention to /etc/localtime, not $TZ. We set TZ anyway,
     # to make sure podman ignores it; and, because this test is locale-
@@ -1301,6 +1301,58 @@ EOF
 
     run_podman 125 run --ulimit core=-1:1000 --rm $IMAGE grep core /proc/self/limits
     is "$output" "Error: ulimit option \"core=-1:1000\" requires name=SOFT:HARD, failed to be parsed: ulimit soft limit must be less than or equal to hard limit: soft: -1 (unlimited), hard: 1000"
+}
+
+# bats test_tags=ci:parallel
+@test "podman run - can use maximum ulimit value" {
+    skip_if_remote "cannot check local ulimits with podman remote"
+    run ulimit -n -H
+    max=$output
+    run_podman run --rm --ulimit=nofile=$max:$max $IMAGE sh -c 'ulimit -n -H'
+    is "$output" "$max" "wrong ulimit value"
+
+    run_podman run --rm $IMAGE sh -c 'ulimit -n -H'
+    default_value=$output
+
+    # Set the current ulimit smaller than the default value
+    ulimit -n -H $((default_value - 1))
+
+    run_podman run --rm $IMAGE sh -c 'ulimit -n -H'
+
+    if is_rootless; then
+        # verify that the value was clamped to the maximum allowed
+        is "$output" "$(ulimit -n -H)" "wrong ulimit value"
+    else
+        # when running as root check that the current environment does not affect
+        # the ulimit set inside the container.
+        is "$output" "$default_value" "wrong ulimit value"
+    fi
+}
+
+# bats test_tags=ci:parallel
+@test "podman run - ulimits have the correct default values" {
+    expected_nofile=1048576
+    expected_nproc=1048576
+
+    # clamp the expected values in rootless mode when they are
+    # greater than the current limits.
+    if is_rootless; then
+        nofile=$(ulimit -n -H)
+        if [[ $nofile -lt $expected_nofile ]]; then
+            expected_nofile=$nofile
+        fi
+        nproc=$(ulimit -u -H)
+        if [[ $nproc -lt $expected_nproc ]]; then
+            expected_nproc=$nproc
+        fi
+    fi
+
+    # validate that nofile and nproc are both set to the correct value
+    run_podman run --rm $IMAGE sh -c 'ulimit -n -H'
+    is "$output" "$expected_nofile" "wrong ulimit -n default value"
+
+    run_podman run --rm $IMAGE sh -c 'ulimit -u -H'
+    is "$output" "$expected_nproc" "wrong ulimit -u default value"
 }
 
 # bats test_tags=ci:parallel
