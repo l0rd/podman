@@ -251,9 +251,16 @@ func FindExecutablePeer(name string) (string, error) {
 		return "", err
 	}
 
-	exe, err = filepath.EvalSymlinks(exe)
+	info, err := os.Lstat(exe)
 	if err != nil {
 		return "", err
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		exe, err = os.Readlink(exe)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return filepath.Join(filepath.Dir(exe), name), nil
