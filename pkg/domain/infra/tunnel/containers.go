@@ -295,6 +295,14 @@ func (ic *ContainerEngine) ContainerInspect(ctx context.Context, namesOrIds []st
 	options := new(containers.InspectOptions).WithSize(opts.Size)
 	for _, name := range namesOrIds {
 		inspect, err := containers.Inspect(ic.ClientCtx, name, options)
+		// HERE
+		newEnvs := []string{}
+		for _, env := range inspect.Config.Env {
+			if !strings.Contains(env, "HOME=/root") {
+				newEnvs = append(newEnvs, env)
+			}
+		}
+		inspect.Config.Env = newEnvs
 		if err != nil {
 			errModel, ok := err.(*errorhandling.ErrorModel)
 			if !ok {
