@@ -4,6 +4,7 @@ package integration
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -68,8 +69,8 @@ var _ = Describe("Podman pod create", func() {
 		webserver.WaitWithDefaultTimeout()
 		Expect(webserver).Should(ExitCleanly())
 
-		check := SystemExec("nc", []string{"-z", "localhost", "80"})
-		Expect(check).Should(ExitWithError(1, ""))
+		_, err := net.Dial("tcp", "localhost:80")
+		Expect(err).To(HaveOccurred())
 	})
 
 	It("podman create pod with network portbindings", func() {
@@ -83,7 +84,7 @@ var _ = Describe("Podman pod create", func() {
 		webserver := podmanTest.Podman([]string{"run", "--pod", pod, "-dt", NGINX_IMAGE})
 		webserver.WaitWithDefaultTimeout()
 		Expect(webserver).Should(ExitCleanly())
-		Expect(ncz(port)).To(BeTrue(), "port %d is up", port)
+		testPortConnection(port)
 	})
 
 	It("podman create pod with id file with network portbindings", func() {
@@ -97,7 +98,7 @@ var _ = Describe("Podman pod create", func() {
 		webserver := podmanTest.Podman([]string{"run", "--pod-id-file", file, "-dt", NGINX_IMAGE})
 		webserver.WaitWithDefaultTimeout()
 		Expect(webserver).Should(ExitCleanly())
-		Expect(ncz(port)).To(BeTrue(), "port %d is up", port)
+		testPortConnection(port)
 	})
 
 	It("podman create pod with no infra but portbindings should fail", func() {
@@ -121,6 +122,22 @@ var _ = Describe("Podman pod create", func() {
 		podResolvConf.WaitWithDefaultTimeout()
 		Expect(podResolvConf).Should(ExitCleanly())
 		Expect(podResolvConf.OutputToString()).To(Equal(alpineResolvConf.OutputToString()))
+	})
+
+	It("podman create pod with --no-hostname", func() {
+		name := "test"
+		podCreate := podmanTest.Podman([]string{"pod", "create", "--no-hostname", "--name", name})
+		podCreate.WaitWithDefaultTimeout()
+		Expect(podCreate).Should(ExitCleanly())
+
+		alpineHostname := podmanTest.Podman([]string{"run", "--rm", "--no-hostname", ALPINE, "cat", "/etc/hostname"})
+		alpineHostname.WaitWithDefaultTimeout()
+		Expect(alpineHostname).Should(ExitCleanly())
+
+		podHostname := podmanTest.Podman([]string{"run", "--pod", name, "--rm", ALPINE, "cat", "/etc/hostname"})
+		podHostname.WaitWithDefaultTimeout()
+		Expect(podHostname).Should(ExitCleanly())
+		Expect(podHostname.OutputToString()).To(Equal(alpineHostname.OutputToString()))
 	})
 
 	It("podman create pod with --no-hosts and no infra should fail", func() {
@@ -147,6 +164,130 @@ var _ = Describe("Podman pod create", func() {
 		podCreate := podmanTest.Podman([]string{"pod", "create", "--add-host", "test.example.com:12.34.56.78", "--name", name, "--infra=false"})
 		podCreate.WaitWithDefaultTimeout()
 		Expect(podCreate).Should(ExitWithError(125, "NoInfra and HostAdd are mutually exclusive pod options: invalid pod spec"))
+	})
+
+	It("podman create pod with --add-host and --no-hosts should fail", func() {
+		name := "test"
+		podCreate := podmanTest.Podman([]string{"pod", "create", "--add-host", "test.example.com:12.34.56.78", "--name", name, "--no-hosts"})
+		podCreate.WaitWithDefaultTimeout()
+		Expect(podCreate).Should(ExitWithError(125, "--no-hosts and --add-host cannot be set together"))
+	})
+
+	Describe("podman create pod with --hosts-file", func() {
+		BeforeEach(func() {
+			imageHosts := filepath.Join(podmanTest.TempDir, "pause_hosts")
+			err := os.WriteFile(imageHosts, []byte("56.78.12.34 image.example.com"), 0755)
+			Expect(err).ToNot(HaveOccurred())
+
+			configHosts := filepath.Join(podmanTest.TempDir, "hosts")
+			err = os.WriteFile(configHosts, []byte("12.34.56.78 config.example.com"), 0755)
+			Expect(err).ToNot(HaveOccurred())
+
+			confFile := filepath.Join(podmanTest.TempDir, "containers.conf")
+			err = os.WriteFile(confFile, []byte(fmt.Sprintf("[containers]\nbase_hosts_file=\"%s\"\n", configHosts)), 0755)
+			Expect(err).ToNot(HaveOccurred())
+			os.Setenv("CONTAINERS_CONF_OVERRIDE", confFile)
+			if IsRemote() {
+				podmanTest.RestartRemoteService()
+			}
+
+			dockerfile := strings.Join([]string{
+				`FROM ` + INFRA_IMAGE,
+				`COPY pause_hosts /etc/hosts`,
+			}, "\n")
+			podmanTest.BuildImage(dockerfile, "foobar.com/hosts_test_pause:latest", "false", "--no-hosts")
+		})
+
+		It("--hosts-file=path", func() {
+			hostsPath := filepath.Join(podmanTest.TempDir, "hosts")
+			err := os.WriteFile(hostsPath, []byte("23.45.67.89 file.example.com"), 0755)
+			Expect(err).ToNot(HaveOccurred())
+
+			podCreate := podmanTest.Podman([]string{"pod", "create", "--hostname", "hosts_test.dev", "--hosts-file=" + hostsPath, "--add-host=add.example.com:34.56.78.90", "--infra-image=foobar.com/hosts_test_pause:latest", "--infra-name=hosts_test_infra", "--name", "hosts_test_pod"})
+			podCreate.WaitWithDefaultTimeout()
+			Expect(podCreate).Should(ExitCleanly())
+
+			session := podmanTest.Podman([]string{"run", "--pod", "hosts_test_pod", "--name", "hosts_test", "--rm", ALPINE, "cat", "/etc/hosts"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(ExitCleanly())
+			Expect(session.OutputToString()).ToNot(ContainSubstring("56.78.12.34 image.example.com"))
+			Expect(session.OutputToString()).ToNot(ContainSubstring("12.34.56.78 config.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("23.45.67.89 file.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("34.56.78.90 add.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("::1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("host.containers.internal host.docker.internal"))
+			Expect(session.OutputToString()).To(ContainSubstring("hosts_test.dev hosts_test_infra"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 hosts_test"))
+		})
+
+		It("--hosts-file=image", func() {
+			podCreate := podmanTest.Podman([]string{"pod", "create", "--hostname", "hosts_test.dev", "--hosts-file=image", "--add-host=add.example.com:34.56.78.90", "--infra-image=foobar.com/hosts_test_pause:latest", "--infra-name=hosts_test_infra", "--name", "hosts_test_pod"})
+			podCreate.WaitWithDefaultTimeout()
+			Expect(podCreate).Should(ExitCleanly())
+
+			session := podmanTest.Podman([]string{"run", "--pod", "hosts_test_pod", "--name", "hosts_test", "--rm", ALPINE, "cat", "/etc/hosts"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(ExitCleanly())
+			Expect(session.OutputToString()).To(ContainSubstring("56.78.12.34 image.example.com"))
+			Expect(session.OutputToString()).ToNot(ContainSubstring("12.34.56.78 config.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("34.56.78.90 add.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("::1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("host.containers.internal host.docker.internal"))
+			Expect(session.OutputToString()).To(ContainSubstring("hosts_test.dev hosts_test_infra"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 hosts_test"))
+		})
+
+		It("--hosts-file=none", func() {
+			podCreate := podmanTest.Podman([]string{"pod", "create", "--hostname", "hosts_test.dev", "--hosts-file=none", "--add-host=add.example.com:34.56.78.90", "--infra-image=foobar.com/hosts_test_pause:latest", "--infra-name=hosts_test_infra", "--name", "hosts_test_pod"})
+			podCreate.WaitWithDefaultTimeout()
+			Expect(podCreate).Should(ExitCleanly())
+
+			session := podmanTest.Podman([]string{"run", "--pod", "hosts_test_pod", "--name", "hosts_test", "--rm", ALPINE, "cat", "/etc/hosts"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(ExitCleanly())
+			Expect(session.OutputToString()).ToNot(ContainSubstring("56.78.12.34 image.example.com"))
+			Expect(session.OutputToString()).ToNot(ContainSubstring("12.34.56.78 config.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("34.56.78.90 add.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("::1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("host.containers.internal host.docker.internal"))
+			Expect(session.OutputToString()).To(ContainSubstring("hosts_test.dev hosts_test_infra"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 hosts_test"))
+		})
+
+		It("--hosts-file= falls back to containers.conf", func() {
+			podCreate := podmanTest.Podman([]string{"pod", "create", "--hostname", "hosts_test.dev", "--hosts-file=", "--add-host=add.example.com:34.56.78.90", "--infra-image=foobar.com/hosts_test_pause:latest", "--infra-name=hosts_test_infra", "--name", "hosts_test_pod"})
+			podCreate.WaitWithDefaultTimeout()
+			Expect(podCreate).Should(ExitCleanly())
+
+			session := podmanTest.Podman([]string{"run", "--pod", "hosts_test_pod", "--name", "hosts_test", "--rm", ALPINE, "cat", "/etc/hosts"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(ExitCleanly())
+			Expect(session.OutputToString()).ToNot(ContainSubstring("56.78.12.34 image.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("12.34.56.78 config.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("34.56.78.90 add.example.com"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("::1 localhost"))
+			Expect(session.OutputToString()).To(ContainSubstring("host.containers.internal host.docker.internal"))
+			Expect(session.OutputToString()).To(ContainSubstring("hosts_test.dev hosts_test_infra"))
+			Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 hosts_test"))
+		})
+	})
+
+	It("podman create pod with --hosts-file and no infra should fail", func() {
+		name := "test"
+		podCreate := podmanTest.Podman([]string{"pod", "create", "--hosts-file=image", "--name", name, "--infra=false"})
+		podCreate.WaitWithDefaultTimeout()
+		Expect(podCreate).Should(ExitWithError(125, "NoInfra and HostsFile are mutually exclusive pod options: invalid pod spec"))
+	})
+
+	It("podman create pod with --hosts-file and --no-hosts should fail", func() {
+		name := "test"
+		podCreate := podmanTest.Podman([]string{"pod", "create", "--hosts-file=image", "--name", name, "--no-hosts"})
+		podCreate.WaitWithDefaultTimeout()
+		Expect(podCreate).Should(ExitWithError(125, "--no-hosts and --hosts-file cannot be set together"))
 	})
 
 	It("podman create pod with DNS server set", func() {

@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/containers/podman/v5/pkg/machine"
@@ -28,9 +32,7 @@ import (
 // List is done at the host level to allow for a *possible* future where
 // more than one provider is used
 func List(vmstubbers []vmconfigs.VMProvider, _ machine.ListOptions) ([]*machine.ListResponse, error) {
-	var (
-		lrs []*machine.ListResponse
-	)
+	var lrs []*machine.ListResponse
 
 	for _, s := range vmstubbers {
 		dirs, err := env.GetMachineDirs(s.VMType())
@@ -47,15 +49,15 @@ func List(vmstubbers []vmconfigs.VMProvider, _ machine.ListOptions) ([]*machine.
 				return nil, err
 			}
 			lr := machine.ListResponse{
-				Name:      name,
-				CreatedAt: mc.Created,
-				LastUp:    mc.LastUp,
-				Running:   state == machineDefine.Running,
-				Starting:  mc.Starting,
-				//Stream:             "", // No longer applicable
+				Name:               name,
+				CreatedAt:          mc.Created,
+				LastUp:             mc.LastUp,
+				Running:            state == machineDefine.Running,
+				Starting:           mc.Starting,
 				VMType:             s.VMType().String(),
 				CPUs:               mc.Resources.CPUs,
 				Memory:             mc.Resources.Memory,
+				Swap:               mc.Swap,
 				DiskSize:           mc.Resources.DiskSize,
 				Port:               mc.SSH.Port,
 				RemoteUsername:     mc.SSH.RemoteUsername,
@@ -115,6 +117,18 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 
 	if umn := opts.UserModeNetworking; umn != nil {
 		createOpts.UserModeNetworking = *umn
+	}
+
+	// Mounts
+	if mp.VMType() != machineDefine.WSLVirt {
+		mc.Mounts = CmdLineVolumesToMounts(opts.Volumes, mp.MountType())
+	}
+
+	// Issue #18230 ... do not mount over important directories at the / level (subdirs are fine)
+	for _, mnt := range mc.Mounts {
+		if err := validateDestinationPaths(mnt.Target); err != nil {
+			return err
+		}
 	}
 
 	// Get Image
@@ -190,18 +204,47 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 		VMType:    mp.VMType(),
 		WritePath: ignitionFile.GetPath(),
 		Rootful:   opts.Rootful,
+		Swap:      opts.Swap,
 	})
 
 	// If the user provides an ignition file, we need to
 	// copy it into the conf dir
 	if len(opts.IgnitionPath) > 0 {
 		err = ignBuilder.BuildWithIgnitionFile(opts.IgnitionPath)
-		return err
+		if err != nil {
+			return err
+		}
+	} else {
+		err = ignBuilder.GenerateIgnitionConfig()
+		if err != nil {
+			return err
+		}
 	}
 
-	err = ignBuilder.GenerateIgnitionConfig()
-	if err != nil {
-		return err
+	if len(opts.PlaybookPath) > 0 {
+		f, err := os.Open(opts.PlaybookPath)
+		if err != nil {
+			return err
+		}
+		s, err := io.ReadAll(f)
+		if err != nil {
+			return fmt.Errorf("read playbook: %w", err)
+		}
+
+		playbookDest := fmt.Sprintf("/home/%s/%s", userName, "playbook.yaml")
+
+		if mp.VMType() != machineDefine.WSLVirt {
+			err = ignBuilder.AddPlaybook(string(s), playbookDest, userName)
+			if err != nil {
+				return err
+			}
+		}
+
+		mc.Ansible = &vmconfigs.AnsibleConfig{
+			PlaybookPath: playbookDest,
+			Contents:     string(s),
+			User:         userName,
+		}
 	}
 
 	readyIgnOpts, err := mp.PrepareIgnition(mc, &ignBuilder)
@@ -220,11 +263,6 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 		Contents: ignition.StrToPtr(readyUnitFile),
 	}
 	ignBuilder.WithUnit(readyUnit)
-
-	// Mounts
-	if mp.VMType() != machineDefine.WSLVirt {
-		mc.Mounts = CmdLineVolumesToMounts(opts.Volumes, mp.MountType())
-	}
 
 	// TODO AddSSHConnectionToPodmanSocket could take an machineconfig instead
 	if err := connection.AddSSHConnectionsToPodmanSocket(mc.HostUser.UID, mc.SSH.Port, mc.SSH.IdentityPath, mc.Name, mc.SSH.RemoteUsername, opts); err != nil {
@@ -245,9 +283,10 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 		return err
 	}
 
-	err = ignBuilder.Build()
-	if err != nil {
-		return err
+	if len(opts.IgnitionPath) == 0 {
+		if err := ignBuilder.Build(); err != nil {
+			return err
+		}
 	}
 
 	return mc.Write()
@@ -261,7 +300,7 @@ func VMExists(name string, vmstubbers []vmconfigs.VMProvider) (*vmconfigs.Machin
 		return nil, false, err
 	}
 	if mc, found := mcs[name]; found {
-		return mc, true, nil
+		return mc.MachineConfig, true, nil
 	}
 	// Check with the provider hypervisor
 	for _, vmstubber := range vmstubbers {
@@ -277,31 +316,46 @@ func VMExists(name string, vmstubbers []vmconfigs.VMProvider) (*vmconfigs.Machin
 }
 
 // checkExclusiveActiveVM checks if any of the machines are already running
-func checkExclusiveActiveVM(provider vmconfigs.VMProvider, mc *vmconfigs.MachineConfig) error {
+func checkExclusiveActiveVM(currentProvider vmconfigs.VMProvider, mc *vmconfigs.MachineConfig) error {
+	providers := provider.GetAll()
 	// Check if any other machines are running; if so, we error
-	localMachines, err := getMCsOverProviders([]vmconfigs.VMProvider{provider})
+	localMachines, err := getMCsOverProviders(providers)
 	if err != nil {
 		return err
 	}
+
 	for name, localMachine := range localMachines {
-		state, err := provider.State(localMachine, false)
+		state, err := localMachine.Provider.State(localMachine.MachineConfig, false)
 		if err != nil {
 			return err
 		}
 		if state == machineDefine.Running || state == machineDefine.Starting {
 			if mc.Name == name {
-				return fmt.Errorf("unable to start %q: machine %s: %w", mc.Name, name, machineDefine.ErrVMAlreadyRunning)
+				return fmt.Errorf("unable to start %q: already running", mc.Name)
 			}
-			return fmt.Errorf("unable to start %q: machine %s is already running: %w", mc.Name, name, machineDefine.ErrMultipleActiveVM)
+
+			// A machine is running in the current provider
+			if currentProvider.VMType() == localMachine.Provider.VMType() {
+				fail := machineDefine.ErrMultipleActiveVM{Name: name}
+				return fmt.Errorf("unable to start %q: %w", mc.Name, &fail)
+			}
+			// A machine is running in an alternate provider
+			fail := machineDefine.ErrMultipleActiveVM{Name: name, Provider: localMachine.Provider.VMType().String()}
+			return fmt.Errorf("unable to start: %w", &fail)
 		}
 	}
 	return nil
 }
 
+type knownMachineConfig struct {
+	Provider      vmconfigs.VMProvider
+	MachineConfig *vmconfigs.MachineConfig
+}
+
 // getMCsOverProviders loads machineconfigs from a config dir derived from the "provider".  it returns only what is known on
 // disk so things like status may be incomplete or inaccurate
-func getMCsOverProviders(vmstubbers []vmconfigs.VMProvider) (map[string]*vmconfigs.MachineConfig, error) {
-	mcs := make(map[string]*vmconfigs.MachineConfig)
+func getMCsOverProviders(vmstubbers []vmconfigs.VMProvider) (map[string]knownMachineConfig, error) {
+	mcs := make(map[string]knownMachineConfig)
 	for _, stubber := range vmstubbers {
 		dirs, err := env.GetMachineDirs(stubber.VMType())
 		if err != nil {
@@ -316,7 +370,10 @@ func getMCsOverProviders(vmstubbers []vmconfigs.VMProvider) (map[string]*vmconfi
 		// iterate known mcs and add the stubbers
 		for mcName, mc := range stubberMCs {
 			if _, ok := mcs[mcName]; !ok {
-				mcs[mcName] = mc
+				mcs[mcName] = knownMachineConfig{
+					Provider:      stubber,
+					MachineConfig: mc,
+				}
 			}
 		}
 	}
@@ -383,6 +440,7 @@ func stopLocked(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *mach
 func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *machineDefine.MachineDirs, opts machine.StartOptions) error {
 	defaultBackoff := 500 * time.Millisecond
 	maxBackoffs := 6
+	signalChanClosed := false
 
 	mc.Lock()
 	defer mc.Unlock()
@@ -410,20 +468,44 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *machineDe
 		}
 
 		if state == machineDefine.Running || state == machineDefine.Starting {
-			return fmt.Errorf("machine %s: %w", mc.Name, machineDefine.ErrVMAlreadyRunning)
+			return fmt.Errorf("unable to start %q: already running", mc.Name)
 		}
 	}
+
+	// if the machine cannot continue starting due to a signal, ensure the state
+	// reflects the machine is no longer starting
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig, ok := <-signalChan
+		if ok {
+			mc.Starting = false
+			logrus.Error("signal received when starting the machine: ", sig)
+
+			if err := mc.Write(); err != nil {
+				logrus.Error(err)
+			}
+
+			os.Exit(1)
+		}
+	}()
 
 	// Set starting to true
 	mc.Starting = true
 	if err := mc.Write(); err != nil {
 		logrus.Error(err)
 	}
+
 	// Set starting to false on exit
 	defer func() {
 		mc.Starting = false
 		if err := mc.Write(); err != nil {
 			logrus.Error(err)
+		}
+
+		if !signalChanClosed {
+			signal.Stop(signalChan)
+			close(signalChan)
 		}
 	}()
 
@@ -500,6 +582,11 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *machineDe
 		return errors.New(msg)
 	}
 
+	// now that the machine has transitioned into the running state, we don't need a goroutine listening for SIGINT or SIGTERM to handle state
+	signal.Stop(signalChan)
+	close(signalChan)
+	signalChanClosed = true
+
 	if err := proxyenv.ApplyProxies(mc); err != nil {
 		return err
 	}
@@ -518,6 +605,12 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *machineDe
 			if err := mc.Write(); err != nil {
 				logrus.Error(err)
 			}
+		}
+	}
+
+	if mp.VMType() == machineDefine.WSLVirt && mc.Ansible != nil && mc.IsFirstBoot() {
+		if err := machine.LocalhostSSHSilent(mc.Ansible.User, mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, []string{"ansible-playbook", mc.Ansible.PlaybookPath}); err != nil {
+			logrus.Error(err)
 		}
 	}
 
@@ -714,4 +807,28 @@ func Reset(mps []vmconfigs.VMProvider, opts machine.ResetOptions) error {
 		}
 	}
 	return resetErrors.ErrorOrNil()
+}
+
+func validateDestinationPaths(dest string) error {
+	// illegalMounts are locations at the / level of the podman machine where we do want users mounting directly over
+	illegalMounts := map[string]struct{}{
+		"/bin":  {},
+		"/boot": {},
+		"/dev":  {},
+		"/etc":  {},
+		"/home": {},
+		"/proc": {},
+		"/root": {},
+		"/run":  {},
+		"/sbin": {},
+		"/sys":  {},
+		"/tmp":  {},
+		"/usr":  {},
+		"/var":  {},
+	}
+	mountTarget := path.Clean(dest)
+	if _, ok := illegalMounts[mountTarget]; ok {
+		return fmt.Errorf("machine mount destination cannot be %q: consider another location or a subdirectory of an existing location", mountTarget)
+	}
+	return nil
 }

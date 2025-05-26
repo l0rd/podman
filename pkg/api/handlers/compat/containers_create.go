@@ -163,6 +163,11 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 	for _, dev := range cc.HostConfig.Devices {
 		devices = append(devices, fmt.Sprintf("%s:%s:%s", dev.PathOnHost, dev.PathInContainer, dev.CgroupPermissions))
 	}
+	for _, r := range cc.HostConfig.Resources.DeviceRequests {
+		if r.Driver == "cdi" {
+			devices = append(devices, r.DeviceIDs...)
+		}
+	}
 
 	// iterate blkreaddevicebps
 	readBps := make([]string, 0, len(cc.HostConfig.BlkioDeviceReadBps))
@@ -469,6 +474,7 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 		User:                 cc.Config.User,
 		UserNS:               string(cc.HostConfig.UsernsMode),
 		UTS:                  string(cc.HostConfig.UTSMode),
+		CgroupNS:             string(cc.HostConfig.CgroupnsMode),
 		Mount:                mounts,
 		VolumesFrom:          cc.HostConfig.VolumesFrom,
 		Workdir:              cc.Config.WorkingDir,
@@ -481,15 +487,15 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 		HealthMaxLogCount:    define.DefaultHealthMaxLogCount,
 		HealthMaxLogSize:     define.DefaultHealthMaxLogSize,
 	}
-	if !rootless.IsRootless() {
-		var ulimits []string
-		if len(cc.HostConfig.Ulimits) > 0 {
-			for _, ul := range cc.HostConfig.Ulimits {
-				ulimits = append(ulimits, ul.String())
-			}
-			cliOpts.Ulimit = ulimits
+
+	var ulimits []string
+	if len(cc.HostConfig.Ulimits) > 0 {
+		for _, ul := range cc.HostConfig.Ulimits {
+			ulimits = append(ulimits, ul.String())
 		}
+		cliOpts.Ulimit = ulimits
 	}
+
 	if cc.HostConfig.Resources.NanoCPUs > 0 {
 		if cliOpts.CPUPeriod != 0 || cliOpts.CPUQuota != 0 {
 			return nil, nil, fmt.Errorf("NanoCpus conflicts with CpuPeriod and CpuQuota")

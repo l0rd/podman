@@ -153,7 +153,7 @@ func imageSearch(cmd *cobra.Command, args []string) error {
 		searchOptions.Password = creds.Password
 	}
 
-	searchReport, err := registry.ImageEngine().Search(registry.GetContext(), searchTerm, searchOptions.ImageSearchOptions)
+	searchReport, err := registry.ImageEngine().Search(registry.Context(), searchTerm, searchOptions.ImageSearchOptions)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func imageSearch(cmd *cobra.Command, args []string) error {
 	isJSON := report.IsJSON(searchOptions.Format)
 	for i, element := range searchReport {
 		d := strings.ReplaceAll(element.Description, "\n", " ")
-		if len(d) > 44 && !(searchOptions.NoTrunc || isJSON) {
+		if len(d) > 44 && (!searchOptions.NoTrunc && !isJSON) {
 			d = strings.TrimSpace(d[:44]) + "..."
 		}
 		searchReport[i].Description = d

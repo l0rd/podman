@@ -3,15 +3,15 @@
 package libpod
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"syscall"
 	"time"
 
-	runccgroup "github.com/opencontainers/runc/libcontainer/cgroups"
-
 	"github.com/containers/common/pkg/cgroups"
 	"github.com/containers/podman/v5/libpod/define"
+	runccgroup "github.com/opencontainers/cgroups"
 	"golang.org/x/sys/unix"
 )
 
@@ -36,6 +36,11 @@ func (c *Container) getPlatformContainerStats(stats *define.ContainerStats, prev
 	// Ubuntu does not have swap memory in cgroups because swap is often not enabled.
 	cgroupStats, err := cgroup.Stat()
 	if err != nil {
+		// cgroup.Stat() is not an atomic operation, so it is possible that the cgroup is removed
+		// while Stat() is running.  Try to catch this case and return a more specific error.
+		if (errors.Is(err, cgroups.ErrStatCgroup) || errors.Is(err, unix.ENODEV)) && !cgroupExist(cgroupPath) {
+			return fmt.Errorf("cgroup %s does not exist: %w", cgroupPath, define.ErrCtrStopped)
+		}
 		return fmt.Errorf("unable to obtain cgroup stats: %w", err)
 	}
 	conState := c.state.State

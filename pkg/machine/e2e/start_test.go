@@ -61,8 +61,10 @@ var _ = Describe("podman machine start", func() {
 	})
 
 	It("start machine already started", func() {
+		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setCmd(i.withImage(mb.imagePath)).run()
+		machineTestBuilderInit := mb.setName(name).setCmd(i.withImage(mb.imagePath))
+		session, err := machineTestBuilderInit.run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 		s := new(startMachine)
@@ -78,7 +80,7 @@ var _ = Describe("podman machine start", func() {
 		startSession, err = mb.setCmd(s).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(startSession).To(Exit(125))
-		Expect(startSession.errorToString()).To(ContainSubstring("VM already running or starting"))
+		Expect(startSession.errorToString()).To(ContainSubstring(fmt.Sprintf("Error: unable to start %q: already running", machineTestBuilderInit.name)))
 	})
 
 	It("start machine with conflict on SSH port", func() {
@@ -143,7 +145,7 @@ var _ = Describe("podman machine start", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session2).To(Exit(0))
 
-		s := startMachine{}
+		s := &startMachine{}
 		session3, err := mb.setName(startme).setCmd(s).setTimeout(time.Minute * 10).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session3).Should(Exit(0))
@@ -181,14 +183,14 @@ var _ = Describe("podman machine start", func() {
 		go func() {
 			defer GinkgoRecover()
 			defer wg.Done()
-			s := startMachine{}
+			s := &startMachine{}
 			startSession1, err = mb.setName(machine1).setCmd(s).setTimeout(time.Minute * 10).run()
 			Expect(err).ToNot(HaveOccurred())
 		}()
 		go func() {
 			defer GinkgoRecover()
 			defer wg.Done()
-			s := startMachine{}
+			s := &startMachine{}
 			// ok this is a hack and should not be needed but the way these test are setup they all
 			// share "mb" which stores the name that is used for the VM, thus running two parallel
 			// can overwrite the name from the other, work around that by creating a new mb for the
@@ -210,10 +212,10 @@ var _ = Describe("podman machine start", func() {
 		Expect(startSession1).To(Or(Exit(0), Exit(125)), "start command should succeed or fail with 125")
 		if startSession1.ExitCode() == 0 {
 			Expect(startSession2).To(Exit(125), "first start worked, second start must fail")
-			Expect(startSession2.errorToString()).To(ContainSubstring("machine %s is already running: only one VM can be active at a time", machine1))
+			Expect(startSession2.errorToString()).To(ContainSubstring("%s already starting or running: only one VM can be active at a time", machine1))
 		} else {
 			Expect(startSession2).To(Exit(0), "first start failed, second start succeed")
-			Expect(startSession1.errorToString()).To(ContainSubstring("machine %s is already running: only one VM can be active at a time", machine2))
+			Expect(startSession1.errorToString()).To(ContainSubstring("%s already starting or running: only one VM can be active at a time", machine2))
 		}
 	})
 })

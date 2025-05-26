@@ -139,6 +139,23 @@ var _ = Describe("Podman run with volumes", func() {
 		session := podmanTest.Podman([]string{"run", "-v", mountPath + ":" + dest, "-v", "/tmp" + ":" + dest, ALPINE, "ls"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitWithError(125, fmt.Sprintf("%s: duplicate mount destination", dest)))
+
+		session = podmanTest.Podman([]string{"run", "-v", "myvol:" + dest, "-v", mountPath + ":" + dest + ":O", ALPINE, "ls", "/test"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).To(ExitWithError(125, fmt.Sprintf("%s: duplicate mount destination", dest)))
+	})
+
+	It("podman run with single character volume", func() {
+		// 1. create single character volume
+		session := podmanTest.Podman([]string{"volume", "create", "a"})
+		session.WaitWithDefaultTimeout()
+		volName := session.OutputToString()
+		Expect(session).Should(ExitCleanly())
+
+		// 2. create container with volume
+		session = podmanTest.Podman([]string{"run", "--volume", volName + ":/data", ALPINE, "sh", "-c", "echo hello world"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
 	})
 
 	It("podman run with conflict between image volume and user mount succeeds", func() {
@@ -1068,5 +1085,41 @@ RUN chmod 755 /test1 /test2 /test3`, ALPINE)
 		Expect(session).To(ExitCleanly())
 
 		mountVolumeAndCheckDirectory(volName, "/test3", "test2", imgName)
+	})
+
+	It("podman run --mount type=volume,subpath=", func() {
+		volName := "testvol"
+		mkvol := podmanTest.Podman([]string{"volume", "create", volName})
+		mkvol.WaitWithDefaultTimeout()
+		Expect(mkvol).Should(ExitCleanly())
+
+		subvol := "/test/test2/"
+		pathInCtr := "/mnt"
+		pathToCreate := filepath.Join(pathInCtr, subvol)
+		popvol := podmanTest.Podman([]string{"run", "-v", fmt.Sprintf("%s:/mnt", volName), ALPINE, "sh", "-c", fmt.Sprintf("mkdir -p %s; touch %s; touch %s", pathToCreate, filepath.Join(pathToCreate, "foo"), filepath.Join(pathToCreate, "bar"))})
+		popvol.WaitWithDefaultTimeout()
+		Expect(popvol).Should(ExitCleanly())
+
+		checkCtr := podmanTest.Podman([]string{"run", "--mount", fmt.Sprintf("type=volume,source=%s,target=%s,subpath=%s", volName, pathInCtr, subvol), ALPINE, "ls", pathInCtr})
+		checkCtr.WaitWithDefaultTimeout()
+		Expect(checkCtr).To(ExitCleanly())
+		Expect(checkCtr.OutputToString()).To(ContainSubstring("foo"))
+		Expect(checkCtr.OutputToString()).To(ContainSubstring("bar"))
+	})
+
+	It("user-specified overlay supersedes image volume", func() {
+		err := podmanTest.RestoreArtifact(REDIS_IMAGE)
+		Expect(err).ToNot(HaveOccurred())
+		mountPath := filepath.Join(podmanTest.TempDir, "secrets")
+		err = os.Mkdir(mountPath, 0755)
+		Expect(err).ToNot(HaveOccurred())
+		testFile := filepath.Join(mountPath, "test1")
+		f, err := os.Create(testFile)
+		Expect(err).ToNot(HaveOccurred(), "os.Create(testfile)")
+		f.Close()
+		Expect(err).ToNot(HaveOccurred())
+		session := podmanTest.Podman([]string{"run", "-v", fmt.Sprintf("%s:/data:O", mountPath), REDIS_IMAGE, "ls", "/data/test1"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
 	})
 })

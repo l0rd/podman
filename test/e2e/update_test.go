@@ -8,6 +8,7 @@ import (
 	"github.com/containers/storage/pkg/fileutils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gexec"
 )
 
 var _ = Describe("Podman update", func() {
@@ -86,6 +87,7 @@ var _ = Describe("Podman update", func() {
 	It("podman update container all options v2", func() {
 		SkipIfCgroupV1("testing flags that only work in cgroup v2")
 		SkipIfRootless("many of these handlers are not enabled while rootless in CI")
+		skipWithoutDevNullb0()
 		session := podmanTest.Podman([]string{"run", "-dt", ALPINE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
@@ -102,10 +104,10 @@ var _ = Describe("Podman update", func() {
 			"--memory-swap", "2G",
 			"--memory-reservation", "2G",
 			"--blkio-weight", "123",
-			"--device-read-bps", "/dev/zero:10mb",
-			"--device-write-bps", "/dev/zero:10mb",
-			"--device-read-iops", "/dev/zero:1000",
-			"--device-write-iops", "/dev/zero:1000",
+			"--device-read-bps", "/dev/nullb0:10mb",
+			"--device-write-bps", "/dev/nullb0:10mb",
+			"--device-read-iops", "/dev/nullb0:1000",
+			"--device-write-iops", "/dev/nullb0:1000",
 			"--pids-limit", "123",
 			ctrID}
 
@@ -242,5 +244,66 @@ var _ = Describe("Podman update", func() {
 
 		podmanTest.CheckContainerSingleField(testCtr, restartPolicyName, "always")
 		podmanTest.CheckContainerSingleField(testCtr, restartPolicyRetries, "0")
+	})
+
+	It("podman update sets/unsets environment variables", func() {
+		testCtr := "test-ctr-name"
+
+		// Test that the variable is not set.
+		ctr1 := podmanTest.Podman([]string{"run", "-t", "--name", testCtr, ALPINE, "printenv", "FOO"})
+		ctr1.WaitWithDefaultTimeout()
+		Expect(ctr1).Should(Exit(1))
+
+		// Test that variable can be set and existing variables are not overridden.
+		update := podmanTest.Podman([]string{"update", "--env", "FOO=BAR", testCtr})
+		update.WaitWithDefaultTimeout()
+		Expect(update).Should(ExitCleanly())
+
+		session := podmanTest.Podman([]string{"start", "--attach", testCtr})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		env := session.OutputToString()
+		Expect(env).To(ContainSubstring("BAR"))
+
+		session = podmanTest.Podman([]string{"inspect", testCtr, "--format", "{{.Config.Env}}"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		env = session.OutputToString()
+		Expect(env).To(ContainSubstring("FOO=BAR"))
+		Expect(env).To(ContainSubstring("PATH="))
+
+		// Test that variable can be updated.
+		update = podmanTest.Podman([]string{"update", "--env", "FOO=RAB", testCtr})
+		update.WaitWithDefaultTimeout()
+		Expect(update).Should(ExitCleanly())
+
+		session = podmanTest.Podman([]string{"start", "--attach", testCtr})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		env = session.OutputToString()
+		Expect(env).To(ContainSubstring("RAB"))
+
+		session = podmanTest.Podman([]string{"inspect", testCtr, "--format", "{{.Config.Env}}"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		env = session.OutputToString()
+		Expect(env).To(ContainSubstring("FOO=RAB"))
+		Expect(env).To(ContainSubstring("PATH="))
+
+		// Test that variable can be unset.
+		update = podmanTest.Podman([]string{"update", "--unsetenv", "FOO", testCtr})
+		update.WaitWithDefaultTimeout()
+		Expect(update).Should(ExitCleanly())
+
+		session = podmanTest.Podman([]string{"start", "--attach", testCtr})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(1))
+
+		session = podmanTest.Podman([]string{"inspect", testCtr, "--format", "{{.Config.Env}}"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		env = session.OutputToString()
+		Expect(env).ToNot(ContainSubstring("FOO"))
+		Expect(env).To(ContainSubstring("PATH="))
 	})
 })

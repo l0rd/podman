@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -62,7 +63,10 @@ Options:
 
 var (
 	rootCmd = &cobra.Command{
-		Use:                   filepath.Base(os.Args[0]) + " [options]",
+		// In shell completion, there is `.exe` suffix on Windows.
+		// This does not provide the same experience across platforms
+		// and was mentioned in [#16499](https://github.com/containers/podman/issues/16499).
+		Use:                   strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") + " [options]",
 		Long:                  "Manage pods, containers and images",
 		SilenceUsage:          true,
 		SilenceErrors:         true,
@@ -113,7 +117,7 @@ func init() {
 }
 
 func Execute() {
-	if err := rootCmd.ExecuteContext(registry.GetContextWithOptions()); err != nil {
+	if err := rootCmd.ExecuteContext(registry.Context()); err != nil {
 		if registry.GetExitCode() == 0 {
 			registry.SetExitCode(define.ExecErrorCodeGeneric)
 		}
@@ -243,6 +247,9 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	if !registry.IsRemote() {
 		if cmd.Flag("hooks-dir").Changed {
 			podmanConfig.ContainersConf.Engine.HooksDir.Set(podmanConfig.HooksDir)
+		}
+		if cmd.Flag("cdi-spec-dir").Changed {
+			podmanConfig.ContainersConf.Engine.CdiSpecDirs.Set(podmanConfig.CdiSpecDirs)
 		}
 
 		// Currently it is only possible to restore a container with the same runtime
@@ -415,6 +422,21 @@ func persistentPostRunE(cmd *cobra.Command, args []string) error {
 
 func configHook() {
 	if dockerConfig != "" {
+		// NOTE: we dont allow pointing --config to a regular file. Code assumed config is a directory
+		// We do allow though pointing at a nonexistent path. Some downstream code will create the folder
+		// at runtime if it does not yet exist.
+		statInfo, err := os.Stat(dockerConfig)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			// Cases where the folder does not exist are allowed, BUT cases where some other Stat() error
+			// is returned should fail
+			fmt.Fprintf(os.Stderr, "Supplied --config folder (%s) exists but is not accessible: %s", dockerConfig, err.Error())
+			os.Exit(1)
+		}
+		if err == nil && !statInfo.IsDir() {
+			// Cases where it does exist but is a file should fail
+			fmt.Fprintf(os.Stderr, "Supplied --config file (%s) is not a directory", dockerConfig)
+			os.Exit(1)
+		}
 		if err := os.Setenv("DOCKER_CONFIG", dockerConfig); err != nil {
 			fmt.Fprintf(os.Stderr, "cannot set DOCKER_CONFIG=%s: %s", dockerConfig, err.Error())
 			os.Exit(1)
@@ -494,7 +516,7 @@ func rootFlags(cmd *cobra.Command, podmanConfig *entities.PodmanConfig) {
 	_ = lFlags.MarkHidden("host")
 
 	configFlagName := "config"
-	lFlags.StringVar(&dockerConfig, "config", "", "Location of authentication config file")
+	lFlags.StringVar(&dockerConfig, "config", "", "Path to directory containing authentication config file")
 	_ = cmd.RegisterFlagCompletionFunc(configFlagName, completion.AutocompleteDefault)
 
 	// Context option added just for compatibility with DockerCLI.
@@ -562,6 +584,10 @@ func rootFlags(cmd *cobra.Command, podmanConfig *entities.PodmanConfig) {
 		hooksDirFlagName := "hooks-dir"
 		pFlags.StringArrayVar(&podmanConfig.HooksDir, hooksDirFlagName, podmanConfig.ContainersConfDefaultsRO.Engine.HooksDir.Get(), "Set the OCI hooks directory path (may be set multiple times)")
 		_ = cmd.RegisterFlagCompletionFunc(hooksDirFlagName, completion.AutocompleteDefault)
+
+		cdiSpecDirFlagName := "cdi-spec-dir"
+		pFlags.StringArrayVar(&podmanConfig.CdiSpecDirs, cdiSpecDirFlagName, podmanConfig.ContainersConfDefaultsRO.Engine.CdiSpecDirs.Get(), "Set the CDI spec directory path (may be set multiple times)")
+		_ = cmd.RegisterFlagCompletionFunc(cdiSpecDirFlagName, completion.AutocompleteDefault)
 
 		pFlags.IntVar(&podmanConfig.MaxWorks, "max-workers", (runtime.NumCPU()*3)+1, "The maximum number of workers for parallel operations")
 

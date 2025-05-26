@@ -19,6 +19,7 @@ import (
 	"github.com/containers/storage/pkg/archive"
 	"github.com/containers/storage/pkg/ioutils"
 	digest "github.com/opencontainers/go-digest"
+	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sirupsen/logrus"
 )
 
@@ -136,6 +137,14 @@ func (d *blobCacheDestination) saveStream(wg *sync.WaitGroup, decompressReader i
 
 func (d *blobCacheDestination) HasThreadSafePutBlob() bool {
 	return d.destination.HasThreadSafePutBlob()
+}
+
+// NoteOriginalOCIConfig provides the config of the image, as it exists on the source, BUT converted to OCI format,
+// or an error obtaining that value (e.g. if the image is an artifact and not a container image).
+// The destination can use it in its TryReusingBlob/PutBlob implementations
+// (otherwise it only obtains the final config after all layers are written).
+func (d *blobCacheDestination) NoteOriginalOCIConfig(ociConfig *imgspecv1.Image, configErr error) error {
+	return d.destination.NoteOriginalOCIConfig(ociConfig, configErr)
 }
 
 // PutBlobWithOptions writes contents of stream and returns data representing the result.
@@ -307,6 +316,10 @@ func (d *blobCacheDestination) PutSignaturesWithFormat(ctx context.Context, sign
 	return d.destination.PutSignaturesWithFormat(ctx, signatures, instanceDigest)
 }
 
-func (d *blobCacheDestination) Commit(ctx context.Context, unparsedToplevel types.UnparsedImage) error {
-	return d.destination.Commit(ctx, unparsedToplevel)
+// CommitWithOptions marks the process of storing the image as successful and asks for the image to be persisted.
+// WARNING: This does not have any transactional semantics:
+// - Uploaded data MAY be visible to others before CommitWithOptions() is called
+// - Uploaded data MAY be removed or MAY remain around if Close() is called without CommitWithOptions() (i.e. rollback is allowed but not guaranteed)
+func (d *blobCacheDestination) CommitWithOptions(ctx context.Context, options private.CommitOptions) error {
+	return d.destination.CommitWithOptions(ctx, options)
 }

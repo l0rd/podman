@@ -5,8 +5,6 @@ env:
     ####
     #### Global variables used for all tasks
     ####
-    # Name of the ultimate destination branch for this CI run, PR or post-merge.
-    DEST_BRANCH: "main"
     # Sane (default) value for GOPROXY and GOSUMDB.
     GOPROXY: "https://proxy.golang.org,direct"
     GOSUMDB: "sum.golang.org"
@@ -26,14 +24,14 @@ env:
     ####
     #### Cache-image names to test with (double-quotes around names are critical)
     ####
-    FEDORA_NAME: "fedora-40"
+    FEDORA_NAME: "fedora-42"
     FEDORA_AARCH64_NAME: "${FEDORA_NAME}-aarch64"
-    PRIOR_FEDORA_NAME: "fedora-39"
+    PRIOR_FEDORA_NAME: "fedora-41"
     RAWHIDE_NAME: "rawhide"
     DEBIAN_NAME: "debian-13"
 
     # Image identifiers
-    IMAGE_SUFFIX: "c20241016t144444z-f40f39d13"
+    IMAGE_SUFFIX: "c20250422t130822z-f42f41d13"
 
     # EC2 images
     FEDORA_AMI: "fedora-aws-${IMAGE_SUFFIX}"
@@ -106,6 +104,11 @@ validate-source_task:
           cd /
           rm -rf $CIRRUS_WORKING_DIR
           mkdir -p $CIRRUS_WORKING_DIR
+          if [[ -z "$CIRRUS_PR" ]]; then
+            DEST_BRANCH="$CIRRUS_BRANCH"
+          else
+            DEST_BRANCH="$CIRRUS_BASE_BRANCH"
+          fi
           git clone --recursive --branch=$DEST_BRANCH https://x-access-token:${CIRRUS_REPO_CLONE_TOKEN}@github.com/${CIRRUS_REPO_FULL_NAME}.git $CIRRUS_WORKING_DIR
           cd $CIRRUS_WORKING_DIR
           git remote update origin
@@ -117,6 +120,12 @@ validate-source_task:
           fi
     # Standard setup stage call, used by nearly every task in CI.
     setup_script: &setup '$GOSRC/$SCRIPT_BASE/setup_environment.sh'
+    golangci-lint_cache:
+        folder: /root/.cache/golangci-lint
+        reupload_on_changes: true
+        fingerprint_script:
+            - go version
+            - grep GOLANGCI_LINT_VERSION Makefile | head -1
     # Standard main execution stage call, used by nearly every task in CI.
     main_script: &main '/usr/bin/time --verbose --output="$STATS_LOGFILE" $GOSRC/$SCRIPT_BASE/runner.sh'
 
@@ -146,11 +155,9 @@ build_task:
               VM_IMAGE_NAME: ${FEDORA_CACHE_IMAGE_NAME}
               CTR_FQIN: ${FEDORA_CONTAINER_FQIN}
         - env:
-              # Note, this is changed to FEDORA_NAME temporarily as f39 contains a to old golang
-              # Once we bump our images to f41/40 this must be turned back to PRIOR_FEDORA_NAME
-              DISTRO_NV: ${FEDORA_NAME}
-              VM_IMAGE_NAME: ${FEDORA_CACHE_IMAGE_NAME}
-              CTR_FQIN: ${FEDORA_CONTAINER_FQIN}
+              DISTRO_NV: ${PRIOR_FEDORA_NAME}
+              VM_IMAGE_NAME: ${PRIOR_FEDORA_CACHE_IMAGE_NAME}
+              CTR_FQIN: ${PRIOR_FEDORA_CONTAINER_FQIN}
               CI_DESIRED_DATABASE: boltdb
               CI_DESIRED_STORAGE: vfs
         - env:
@@ -324,9 +331,21 @@ freebsd_alt_build_task:
         TEST_FLAVOR: "altbuild"
         ALT_NAME: 'FreeBSD Cross'
     freebsd_instance:
-        image_family: freebsd-13-3
+        image_family: freebsd-13-4
+        # golangci-lint is a very, very hungry beast.
+        cpu: 4
+        memory: 8Gb
     setup_script:
         - pkg install -y gpgme bash go-md2man gmake gsed gnugrep go pkgconf zstd
+        - go version # Downloads a new go version based on go.mod's go directive.
+    golint_cache:
+        folder: ~/.cache/golangci-lint
+        reupload_on_changes: true
+        fingerprint_script:
+            - go version
+            - grep GOLANGCI_LINT_VERSION Makefile | head -1
+    lint_script:
+        - gmake golangci-lint
     build_amd64_script:
         - gmake podman-release
     # This task cannot make use of the shared repo.tar.zst artifact and must
@@ -555,6 +574,44 @@ unit_test_task:
     always: *logs_artifacts
 
 
+unit_test_windows_task:
+    name: "Unit tests on Windows"
+    alias: unit_test_windows
+    # Docs: ./contrib/cirrus/CIModes.md (Cirrus Task contexts and runtime modes)
+    # only when: - main rules (see doc above); or
+    #            - unit test files are changed (contains a false positves such as test/e2e/
+    #              but that should not be an issue, it only runs when it doesn't have to)
+    #            - actual source code changed
+    only_if: >-
+        $CIRRUS_PR == '' ||
+        $CIRRUS_CHANGE_TITLE =~ '.*CI:ALL.*' ||
+        changesInclude('.cirrus.yml', 'Makefile', 'contrib/cirrus/**', 'vendor/**', 'test/tools/**', 'test/registries*.conf', 'hack/**', 'version/rawversion/*') ||
+        changesInclude('winmake.ps1') ||
+        changesInclude('**/*_test.go') ||
+        (changesInclude('**/*.go', '**/*.c', '**/*.h') && !changesIncludeOnly('test/**', 'pkg/machine/e2e/**'))
+    # Special case, we do not run macos/windows builds on rhel branches.
+    # Thus the machine task should not be run too, while we use only_if
+    # everywhere to do so here it would mean we would need duplicate the
+    # full big only_if condition which is more difficult to maintain so
+    # use the skip here.
+    skip: &skip_rhel_release |
+        $CIRRUS_BRANCH =~ 'v[0-9\.]+-rhel' ||
+        $CIRRUS_BASE_BRANCH =~ 'v[0-9\.]+-rhel'
+    depends_on: *build
+    ec2_instance: *windows
+    timeout_in: 20m
+    env:
+         <<: *winenv
+         TEST_FLAVOR: unit
+    clone_script: *winclone
+    main_script: ".\\repo\\contrib\\cirrus\\win-unit-main.ps1"
+    always:
+        # Required for `contrib/cirrus/logformatter` to work properly
+        html_artifacts:
+            path: ./*.html
+            type: text/html
+
+
 apiv2_test_task:
     name: "APIv2 test on $DISTRO_NV ($PRIV_NAME)"
     alias: apiv2_test
@@ -665,9 +722,18 @@ container_integration_test_task:
     # Docs: ./contrib/cirrus/CIModes.md
     only_if: *only_if_int_test
     depends_on: *build
+    matrix: &fedora_vm_axis
+        - env:
+              DISTRO_NV: ${FEDORA_NAME}
+              VM_IMAGE_NAME: ${FEDORA_CACHE_IMAGE_NAME}
+              CTR_FQIN: ${FEDORA_CONTAINER_FQIN}
+        - env:
+              DISTRO_NV: ${PRIOR_FEDORA_NAME}
+              VM_IMAGE_NAME: ${PRIOR_FEDORA_CACHE_IMAGE_NAME}
+              CTR_FQIN: ${PRIOR_FEDORA_CONTAINER_FQIN}
+              CI_DESIRED_DATABASE: boltdb
     gce_instance: *fastvm
     env:
-        <<: *stdenvars
         TEST_FLAVOR: int
         TEST_ENVIRON: container
     clone_script: *get_gosrc
@@ -757,15 +823,13 @@ podman_machine_windows_task:
     # everywhere to do so here it would mean we would need duplicate the
     # full big only_if condition which is more difficult to maintain so
     # use the skip here.
-    skip: &skip_rhel_release |
-        $CIRRUS_BRANCH =~ 'v[0-9\.]+-rhel' ||
-        $CIRRUS_BASE_BRANCH =~ 'v[0-9\.]+-rhel'
+    skip: *skip_rhel_release
     depends_on: *build
     ec2_instance:
         <<: *windows
-        type: m5zn.metal
+        type: z1d.metal
         platform: windows
-    timeout_in: 45m
+    timeout_in: 60m
     env: *winenv
     matrix:
       - env:
@@ -773,6 +837,23 @@ podman_machine_windows_task:
       - env:
           TEST_FLAVOR: "machine-hyperv"
     clone_script: *winclone
+    # This depends on an instance with an local NVMe storage so we can make use of fast IO
+    # Our machine tests are IO bound so this is rather imporant to speed them up a lot.
+    setup_disk_script: |
+        echo "Get-Disk"
+        Get-Disk | Ft -autosize | out-string -width 4096
+        # Hard coded to disk 0, assume that this is always the case for our ec2 instance.
+        # It is not clear to me how I would filter by name because we still have two disks
+        # with the same name.
+        echo "Format and mount disk 0"
+        $disk = Get-Disk 0
+        $disk | Initialize-Disk -PartitionStyle MBR
+        $disk | New-Partition -UseMaximumSize -MbrType IFS
+        $Partition = Get-Partition -DiskNumber $disk.Number
+        $Partition | Format-Volume -FileSystem NTFS -Confirm:$false
+        $Partition | Add-PartitionAccessPath -AccessPath "Z:\"
+        echo "Get-Volume"
+        Get-Volume
     main_script: ".\\repo\\contrib\\cirrus\\win-podman-machine-main.ps1"
     always:
         # Required for `contrib/cirrus/logformatter` to work properly
@@ -788,7 +869,7 @@ podman_machine_mac_task:
     skip: *skip_rhel_release
     depends_on: *build
     persistent_worker: *mac_pw
-    timeout_in: 35m
+    timeout_in: 60m
     env:
         <<: *mac_env
         DISTRO_NV: "darwin"
@@ -969,8 +1050,7 @@ buildah_bud_test_task:
             PODBIN_NAME: podman
         - env:
             PODBIN_NAME: remote
-    gce_instance: *standardvm
-    timeout_in: 45m
+    gce_instance: *fastvm
     clone_script: *get_gosrc
     setup_script: *setup
     main_script: *main
@@ -1058,6 +1138,7 @@ success_task:
         - win_installer
         - docker-py_test
         - unit_test
+        - unit_test_windows
         - apiv2_test
         - compose_test
         - local_integration_test

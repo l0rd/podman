@@ -1,4 +1,4 @@
-//go:build linux || freebsd
+//go:build linux || freebsd || windows
 
 package qemu
 
@@ -201,7 +201,7 @@ func (q *QEMUStubber) stopLocked(mc *vmconfigs.MachineConfig) error {
 
 	if err := qmpMonitor.Disconnect(); err != nil {
 		// FIXME: this error should probably be returned
-		return nil //nolint: nilerr
+		return nil
 	}
 	disconnected = true
 

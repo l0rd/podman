@@ -227,7 +227,7 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: force
 	//    type: boolean
-	//    description: remove the image even if used by containers or has other tags
+	//    description: Remove the image even if it is being used by stopped containers or has other tags
 	//  - in: query
 	//    name: noprune
 	//    type: boolean
@@ -523,6 +523,12 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//      TBD Extra hosts to add to /etc/hosts
 	//      (As of version 1.xx)
 	//  - in: query
+	//    name: nohosts
+	//    type: boolean
+	//    default:
+	//    description: |
+	//      Not to create /etc/hosts when building the image
+	//  - in: query
 	//    name: remote
 	//    type: string
 	//    default:
@@ -560,6 +566,13 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    description: |
 	//      Contents of base images to be modified on ADD or COPY only
 	//      (As of Podman version v5.2)
+	//  - in: query
+	//    name: inheritlabels
+	//    type: boolean
+	//    default: true
+	//    description: |
+	//      Inherit the labels from the base image or base stages
+	//      (As of Podman version v5.5)
 	//  - in: query
 	//    name: nocache
 	//    type: boolean
@@ -1502,6 +1515,12 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//      TBD Extra hosts to add to /etc/hosts
 	//      (As of version 1.xx)
 	//  - in: query
+	//    name: nohosts
+	//    type: boolean
+	//    default:
+	//    description: |
+	//      Not to create /etc/hosts when building the image
+	//  - in: query
 	//    name: remote
 	//    type: string
 	//    default:
@@ -1527,6 +1546,13 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    description: |
 	//      Contents of base images to be modified on ADD or COPY only
 	//      (As of Podman version v5.2)
+	//  - in: query
+	//    name: inheritlabels
+	//    type: boolean
+	//    default: true
+	//    description: |
+	//      Inherit the labels from the base image or base stages
+	//      (As of Podman version v5.5)
 	//  - in: query
 	//    name: nocache
 	//    type: boolean

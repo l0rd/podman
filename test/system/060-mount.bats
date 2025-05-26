@@ -148,6 +148,14 @@ load helpers
     run_podman run --rm --mount "${mountopts},readwrite=true" $iname \
                touch /image-mount/readwrite
 
+    tmpctr="c-$(safename)"
+    subpathopts="type=image,src=$iname,dst=/image-mount,subpath=/etc"
+    run_podman run --name $tmpctr --mount "${subpathopts}" $iname \
+               ls /image-mount/shadow
+    run_podman inspect $tmpctr --format '{{ (index .Mounts 0).SubPath }}'
+    assert "$output" == "/etc" "SubPath contains /etc"
+    run_podman rm $tmpctr
+
     # The rest of the tests below are meaningless under remote
     if is_remote; then
         run_podman rmi $iname
@@ -301,9 +309,7 @@ EOF
 
     # umount, and make sure mountpoint no longer exists
     run_podman umount $external_cname
-    if findmnt "$mount_path" >/dev/null ; then
-        die "'podman umount' did not umount $mount_path"
-    fi
+    ensure_no_mountpoint "$mount_path"
     buildah rm $external_cname
 }
 

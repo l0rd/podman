@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math/bits"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,7 +27,6 @@ import (
 	"github.com/containers/storage/pkg/system"
 	"github.com/containers/storage/pkg/tarlog"
 	"github.com/containers/storage/pkg/truncindex"
-	multierror "github.com/hashicorp/go-multierror"
 	"github.com/klauspost/pgzip"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/opencontainers/selinux/go-selinux"
@@ -47,11 +47,13 @@ const (
 
 type layerLocations uint8
 
-// The backing store is split in two json files, one (the volatile)
-// that is written without fsync() meaning it isn't as robust to
-// unclean shutdown
+// The backing store is split in three json files.
+// The volatile store is written without fsync() meaning it isn't as robust to unclean shutdown.
+// Optionally, an image store can be configured to store RO layers.
+// The stable store is used for the remaining layers that don't go into the other stores.
 const (
 	stableLayerLocation layerLocations = 1 << iota
+	imageStoreLayerLocation
 	volatileLayerLocation
 
 	numLayerLocationIndex = iota
@@ -59,6 +61,10 @@ const (
 
 func layerLocationFromIndex(index int) layerLocations {
 	return 1 << index
+}
+
+func indexFromLayerLocation(location layerLocations) int {
+	return bits.TrailingZeros(uint(location))
 }
 
 // A Layer is a record of a copy-on-write layer that's stored by the lower
@@ -155,7 +161,7 @@ type Layer struct {
 	GIDs []uint32 `json:"gidset,omitempty"`
 
 	// Flags is arbitrary data about the layer.
-	Flags map[string]interface{} `json:"flags,omitempty"`
+	Flags map[string]any `json:"flags,omitempty"`
 
 	// UIDMap and GIDMap are used for setting up a layer's contents
 	// for use inside of a user namespace where UID mapping is being used.
@@ -165,8 +171,8 @@ type Layer struct {
 	// ReadOnly is true if this layer resides in a read-only layer store.
 	ReadOnly bool `json:"-"`
 
-	// volatileStore is true if the container is from the volatile json file
-	volatileStore bool `json:"-"`
+	// location is the location of the store where the layer is present.
+	location layerLocations `json:"-"`
 
 	// BigDataNames is a list of names of data items that we keep for the
 	// convenience of the caller.  They can be large, and are only in
@@ -336,6 +342,9 @@ type rwLayerStore interface {
 
 	// Clean up unreferenced layers
 	GarbageCollect() error
+
+	// Dedup deduplicates layers in the store.
+	dedup(drivers.DedupArgs) (drivers.DedupResult, error)
 }
 
 type multipleLockFile struct {
@@ -428,18 +437,10 @@ type layerStore struct {
 	driver drivers.Driver
 }
 
-// The caller must hold r.inProcessLock for reading.
-func layerLocation(l *Layer) layerLocations {
-	if l.volatileStore {
-		return volatileLayerLocation
-	}
-	return stableLayerLocation
-}
-
 func copyLayer(l *Layer) *Layer {
 	return &Layer{
 		ID:                 l.ID,
-		Names:              copyStringSlice(l.Names),
+		Names:              copySlicePreferringNil(l.Names),
 		Parent:             l.Parent,
 		Metadata:           l.Metadata,
 		MountLabel:         l.MountLabel,
@@ -453,13 +454,13 @@ func copyLayer(l *Layer) *Layer {
 		TOCDigest:          l.TOCDigest,
 		CompressionType:    l.CompressionType,
 		ReadOnly:           l.ReadOnly,
-		volatileStore:      l.volatileStore,
-		BigDataNames:       copyStringSlice(l.BigDataNames),
-		Flags:              maps.Clone(l.Flags),
-		UIDMap:             copyIDMap(l.UIDMap),
-		GIDMap:             copyIDMap(l.GIDMap),
-		UIDs:               copyUint32Slice(l.UIDs),
-		GIDs:               copyUint32Slice(l.GIDs),
+		location:           l.location,
+		BigDataNames:       copySlicePreferringNil(l.BigDataNames),
+		Flags:              copyMapPreferringNil(l.Flags),
+		UIDMap:             copySlicePreferringNil(l.UIDMap),
+		GIDMap:             copySlicePreferringNil(l.GIDMap),
+		UIDs:               copySlicePreferringNil(l.UIDs),
+		GIDs:               copySlicePreferringNil(l.GIDs),
 	}
 }
 
@@ -655,8 +656,12 @@ func (r *layerStore) layersModified() (lockfile.LastWrite, bool, error) {
 	// If the layers.json file or container-layers.json has been
 	// modified manually, then we have to reload the storage in
 	// any case.
-	for locationIndex := 0; locationIndex < numLayerLocationIndex; locationIndex++ {
-		info, err := os.Stat(r.jsonPath[locationIndex])
+	for locationIndex := range numLayerLocationIndex {
+		rpath := r.jsonPath[locationIndex]
+		if rpath == "" {
+			continue
+		}
+		info, err := os.Stat(rpath)
 		if err != nil && !os.IsNotExist(err) {
 			return lockfile.LastWrite{}, false, fmt.Errorf("stat layers file: %w", err)
 		}
@@ -789,9 +794,12 @@ func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 	layers := []*Layer{}
 	ids := make(map[string]*Layer)
 
-	for locationIndex := 0; locationIndex < numLayerLocationIndex; locationIndex++ {
+	for locationIndex := range numLayerLocationIndex {
 		location := layerLocationFromIndex(locationIndex)
 		rpath := r.jsonPath[locationIndex]
+		if rpath == "" {
+			continue
+		}
 		info, err := os.Stat(rpath)
 		if err != nil {
 			if !os.IsNotExist(err) {
@@ -818,9 +826,7 @@ func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 				continue // skip invalid duplicated layer
 			}
 			// Remember where the layer came from
-			if location == volatileLayerLocation {
-				layer.volatileStore = true
-			}
+			layer.location = location
 			layers = append(layers, layer)
 			ids[layer.ID] = layer
 		}
@@ -841,7 +847,7 @@ func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 			if conflict, ok := names[name]; ok {
 				r.removeName(conflict, name)
 				errorToResolveBySaving = ErrDuplicateLayerNames
-				modifiedLocations |= layerLocation(conflict)
+				modifiedLocations |= conflict.location
 			}
 			names[name] = layers[n]
 		}
@@ -913,22 +919,31 @@ func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 		// user of this storage area marked for deletion but didn't manage to
 		// actually delete.
 		var incompleteDeletionErrors error // = nil
+		var layersToDelete []*Layer
 		for _, layer := range r.layers {
 			if layer.Flags == nil {
-				layer.Flags = make(map[string]interface{})
+				layer.Flags = make(map[string]any)
 			}
 			if layerHasIncompleteFlag(layer) {
-				logrus.Warnf("Found incomplete layer %#v, deleting it", layer.ID)
-				err := r.deleteInternal(layer.ID)
-				if err != nil {
-					// Don't return the error immediately, because deleteInternal does not saveLayers();
-					// Even if deleting one incomplete layer fails, call saveLayers() so that other possible successfully
-					// deleted incomplete layers have their metadata correctly removed.
-					incompleteDeletionErrors = multierror.Append(incompleteDeletionErrors,
-						fmt.Errorf("deleting layer %#v: %w", layer.ID, err))
-				}
-				modifiedLocations |= layerLocation(layer)
+				// Important: Do not call r.deleteInternal() here. It modifies r.layers
+				// which causes unexpected side effects while iterating over r.layers here.
+				// The range loop has no idea that the underlying elements where shifted
+				// around.
+				layersToDelete = append(layersToDelete, layer)
 			}
+		}
+		// Now actually delete the layers
+		for _, layer := range layersToDelete {
+			logrus.Warnf("Found incomplete layer %q, deleting it", layer.ID)
+			err := r.deleteInternal(layer.ID)
+			if err != nil {
+				// Don't return the error immediately, because deleteInternal does not saveLayers();
+				// Even if deleting one incomplete layer fails, call saveLayers() so that other possible successfully
+				// deleted incomplete layers have their metadata correctly removed.
+				incompleteDeletionErrors = errors.Join(incompleteDeletionErrors,
+					fmt.Errorf("deleting layer %#v: %w", layer.ID, err))
+			}
+			modifiedLocations |= layer.location
 		}
 		if err := r.saveLayers(modifiedLocations); err != nil {
 			return false, err
@@ -997,7 +1012,7 @@ func (r *layerStore) save(saveLocations layerLocations) error {
 // The caller must hold r.lockfile locked for writing.
 // The caller must hold r.inProcessLock for WRITING.
 func (r *layerStore) saveFor(modifiedLayer *Layer) error {
-	return r.save(layerLocation(modifiedLayer))
+	return r.save(modifiedLayer.location)
 }
 
 // The caller must hold r.lockfile locked for writing.
@@ -1016,18 +1031,21 @@ func (r *layerStore) saveLayers(saveLocations layerLocations) error {
 	}
 	r.lastWrite = lw
 
-	for locationIndex := 0; locationIndex < numLayerLocationIndex; locationIndex++ {
+	for locationIndex := range numLayerLocationIndex {
 		location := layerLocationFromIndex(locationIndex)
 		if location&saveLocations == 0 {
 			continue
 		}
 		rpath := r.jsonPath[locationIndex]
+		if rpath == "" {
+			return fmt.Errorf("internal error: no path for location %v", location)
+		}
 		if err := os.MkdirAll(filepath.Dir(rpath), 0o700); err != nil {
 			return err
 		}
 		subsetLayers := make([]*Layer, 0, len(r.layers))
 		for _, layer := range r.layers {
-			if layerLocation(layer) == location {
+			if layer.location == location {
 				subsetLayers = append(subsetLayers, layer)
 			}
 		}
@@ -1127,12 +1145,17 @@ func (s *store) newLayerStore(rundir, layerdir, imagedir string, driver drivers.
 	if transient {
 		volatileDir = rundir
 	}
+	layersImageDir := ""
+	if imagedir != "" {
+		layersImageDir = filepath.Join(imagedir, "layers.json")
+	}
 	rlstore := layerStore{
 		lockfile:       newMultipleLockFile(lockFiles...),
 		mountsLockfile: mountsLockfile,
 		rundir:         rundir,
 		jsonPath: [numLayerLocationIndex]string{
 			filepath.Join(layerdir, "layers.json"),
+			layersImageDir,
 			filepath.Join(volatileDir, "volatile-layers.json"),
 		},
 		layerdir: layerdir,
@@ -1170,6 +1193,7 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roL
 		rundir:         rundir,
 		jsonPath: [numLayerLocationIndex]string{
 			filepath.Join(layerdir, "layers.json"),
+			"",
 			filepath.Join(layerdir, "volatile-layers.json"),
 		},
 		layerdir: layerdir,
@@ -1237,7 +1261,7 @@ func (r *layerStore) ClearFlag(id string, flag string) error {
 }
 
 // Requires startWriting.
-func (r *layerStore) SetFlag(id string, flag string, value interface{}) error {
+func (r *layerStore) SetFlag(id string, flag string, value any) error {
 	if !r.lockfile.IsReadWrite() {
 		return fmt.Errorf("not allowed to set flags on layers at %q: %w", r.layerdir, ErrStoreIsReadOnly)
 	}
@@ -1246,7 +1270,7 @@ func (r *layerStore) SetFlag(id string, flag string, value interface{}) error {
 		return ErrLayerUnknown
 	}
 	if layer.Flags == nil {
-		layer.Flags = make(map[string]interface{})
+		layer.Flags = make(map[string]any)
 	}
 	layer.Flags[flag] = value
 	return r.saveFor(layer)
@@ -1316,6 +1340,17 @@ func (r *layerStore) PutAdditionalLayer(id string, parentLayer *Layer, names []s
 		return nil, err
 	}
 	return copyLayer(layer), nil
+}
+
+func (r *layerStore) pickStoreLocation(volatile, writeable bool) layerLocations {
+	switch {
+	case volatile:
+		return volatileLayerLocation
+	case !writeable && r.jsonPath[indexFromLayerLocation(imageStoreLayerLocation)] != "":
+		return imageStoreLayerLocation
+	default:
+		return stableLayerLocation
+	}
 }
 
 // Requires startWriting.
@@ -1406,11 +1441,11 @@ func (r *layerStore) create(id string, parentLayer *Layer, names []string, mount
 		CompressionType:    templateCompressionType,
 		UIDs:               templateUIDs,
 		GIDs:               templateGIDs,
-		Flags:              copyStringInterfaceMap(moreOptions.Flags),
-		UIDMap:             copyIDMap(moreOptions.UIDMap),
-		GIDMap:             copyIDMap(moreOptions.GIDMap),
+		Flags:              newMapFrom(moreOptions.Flags),
+		UIDMap:             copySlicePreferringNil(moreOptions.UIDMap),
+		GIDMap:             copySlicePreferringNil(moreOptions.GIDMap),
 		BigDataNames:       []string{},
-		volatileStore:      moreOptions.Volatile,
+		location:           r.pickStoreLocation(moreOptions.Volatile, writeable),
 	}
 	layer.Flags[incompleteFlag] = true
 
@@ -1843,7 +1878,7 @@ func (r *layerStore) BigDataNames(id string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("locating layer with ID %q to retrieve bigdata names: %w", id, ErrImageUnknown)
 	}
-	return copyStringSlice(layer.BigDataNames), nil
+	return copySlicePreferringNil(layer.BigDataNames), nil
 }
 
 // Requires startReading or startWriting.
@@ -1896,7 +1931,7 @@ func (r *layerStore) deleteInternal(id string) error {
 	// Ensure that if we are interrupted, the layer will be cleaned up.
 	if !layerHasIncompleteFlag(layer) {
 		if layer.Flags == nil {
-			layer.Flags = make(map[string]interface{})
+			layer.Flags = make(map[string]any)
 		}
 		layer.Flags[incompleteFlag] = true
 		if err := r.saveFor(layer); err != nil {
@@ -2244,33 +2279,33 @@ func (r *layerStore) Diff(from, to string, options *DiffOptions) (io.ReadCloser,
 	// but they modify in-memory state.
 	fgetter, err := r.newFileGetter(to)
 	if err != nil {
-		errs := multierror.Append(nil, fmt.Errorf("creating file-getter: %w", err))
+		errs := fmt.Errorf("creating file-getter: %w", err)
 		if err := decompressor.Close(); err != nil {
-			errs = multierror.Append(errs, fmt.Errorf("closing decompressor: %w", err))
+			errs = errors.Join(errs, fmt.Errorf("closing decompressor: %w", err))
 		}
 		if err := tsfile.Close(); err != nil {
-			errs = multierror.Append(errs, fmt.Errorf("closing tarstream headers: %w", err))
+			errs = errors.Join(errs, fmt.Errorf("closing tarstream headers: %w", err))
 		}
-		return nil, errs.ErrorOrNil()
+		return nil, errs
 	}
 
 	tarstream := asm.NewOutputTarStream(fgetter, metadata)
 	rc := ioutils.NewReadCloserWrapper(tarstream, func() error {
-		var errs *multierror.Error
+		var errs error
 		if err := decompressor.Close(); err != nil {
-			errs = multierror.Append(errs, fmt.Errorf("closing decompressor: %w", err))
+			errs = errors.Join(errs, fmt.Errorf("closing decompressor: %w", err))
 		}
 		if err := tsfile.Close(); err != nil {
-			errs = multierror.Append(errs, fmt.Errorf("closing tarstream headers: %w", err))
+			errs = errors.Join(errs, fmt.Errorf("closing tarstream headers: %w", err))
 		}
 		if err := tarstream.Close(); err != nil {
-			errs = multierror.Append(errs, fmt.Errorf("closing reconstructed tarstream: %w", err))
+			errs = errors.Join(errs, fmt.Errorf("closing reconstructed tarstream: %w", err))
 		}
 		if err := fgetter.Close(); err != nil {
-			errs = multierror.Append(errs, fmt.Errorf("closing file-getter: %w", err))
+			errs = errors.Join(errs, fmt.Errorf("closing file-getter: %w", err))
 		}
 		if errs != nil {
-			return errs.ErrorOrNil()
+			return errs
 		}
 		return nil
 	})
@@ -2440,16 +2475,12 @@ func (r *layerStore) applyDiffWithOptions(to string, layerOptions *LayerOptions,
 	for uid := range uidLog {
 		layer.UIDs = append(layer.UIDs, uid)
 	}
-	sort.Slice(layer.UIDs, func(i, j int) bool {
-		return layer.UIDs[i] < layer.UIDs[j]
-	})
+	slices.Sort(layer.UIDs)
 	layer.GIDs = make([]uint32, 0, len(gidLog))
 	for gid := range gidLog {
 		layer.GIDs = append(layer.GIDs, gid)
 	}
-	sort.Slice(layer.GIDs, func(i, j int) bool {
-		return layer.GIDs[i] < layer.GIDs[j]
-	})
+	slices.Sort(layer.GIDs)
 
 	err = r.saveFor(layer)
 
@@ -2505,7 +2536,7 @@ func (r *layerStore) applyDiffFromStagingDirectory(id string, diffOutput *driver
 	layer.Metadata = diffOutput.Metadata
 	if options != nil && options.Flags != nil {
 		if layer.Flags == nil {
-			layer.Flags = make(map[string]interface{})
+			layer.Flags = make(map[string]any)
 		}
 		maps.Copy(layer.Flags, options.Flags)
 	}
@@ -2590,6 +2621,11 @@ func (r *layerStore) LayersByUncompressedDigest(d digest.Digest) ([]Layer, error
 // Requires startReading or startWriting.
 func (r *layerStore) LayersByTOCDigest(d digest.Digest) ([]Layer, error) {
 	return r.layersByDigestMap(r.bytocsum, d)
+}
+
+// Requires startWriting.
+func (r *layerStore) dedup(req drivers.DedupArgs) (drivers.DedupResult, error) {
+	return r.driver.Dedup(req)
 }
 
 func closeAll(closes ...func() error) (rErr error) {

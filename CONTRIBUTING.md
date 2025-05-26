@@ -47,6 +47,7 @@ If they do not respond after several days, you can notify a maintainer to have t
 When working on an issue, please assign it to yourself.
 You can use the `/assign` bot command in a comment on an issue to assign it to yourself.
 If you lack permissions to do so, you can ping the `@containers/podman-maintainers` group to have a maintainer set you as assignee.
+If you are a maintainer of Podman project, please following the [instructions](https://github.com/containers/podman/blob/main/TRIAGE.md) to triage new issues.
 
 ## Contributing to Podman
 
@@ -185,6 +186,10 @@ PRs for new features should include some background on what use cases the new co
 When possible and when it makes sense, try to break-up larger PRs into smaller ones - it's easier to review smaller code changes.
 But only if those smaller ones make sense as stand-alone PRs.
 
+Pull requests should be submitted to the main branch of the Podman repository. Bug fixes may be cherry-picked or back-ported
+to Podman release branches but must first be merged upstream. Maintainers reserve the right to not accept any pull requests
+to any release branches.
+
 Regardless of the type of PR, all PRs should include:
 * Well-documented code changes, both through comments in the code itself and high-quality commit messages.
 * Additional tests. Ideally, they should fail w/o your code change applied.
@@ -231,7 +236,7 @@ It’s important to describe the change in plain English for the reviewer to ver
 Solve only one problem per patch.
 If your description starts to get long, that’s a sign that you probably need to split up your patch.
 
-If the patch fixes a logged bug entry, refer to that bug entry by number and URL.
+If the patch fixes a logged bug entry, refer to that bug entry by number or URL.
 If the patch follows from a mailing list discussion, give a URL to the mailing list archive.
 Please format these lines as `Fixes:` followed by the URL or, for Github bugs, the bug number preceded by a #.
 For example:
@@ -320,6 +325,10 @@ Use your real name (sorry, no pseudonyms or anonymous contributions).
 
 If you set your `user.name` and `user.email` git configs, you can sign your commit automatically with `git commit -s`.
 
+### Reviewing PRs
+
+If you are a maintainer of Podman project, please following the [guidelines](https://github.com/containers/podman/blob/main/REVIEWING.md) on how to review a PR.
+
 ### Continuous Integration
 
 All pull requests automatically run Podman's test suite.
@@ -358,6 +367,9 @@ or persistently faulty condition.  This risks additional bugs being introduced
 and further complication of necessary corrective measures.  Most likely people
 are aware and working on this, but it doesn't hurt [to confirm and/or try and help
 if possible.](#communications).
+
+NOTE: Jobs triggered by Packit are not merge blockers and should be considered of secondary importance.
+Contributors and maintainers should feel free to ignore failure status on such jobs.
 
 ## Communications
 

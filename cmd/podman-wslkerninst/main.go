@@ -16,12 +16,9 @@ import (
 )
 
 const (
-	//nolint:stylecheck
 	MB_ICONWARNING = 0x00000030
-	//nolint:stylecheck
-	MB_OK = 0x00000000
-	//nolint:stylecheck
-	MB_DEFBUTTON1 = 0x00000000
+	MB_OK          = 0x00000000
+	MB_DEFBUTTON1  = 0x00000000
 )
 
 const KernelWarning = "WSL Kernel installation did not complete successfully. " +
@@ -51,7 +48,7 @@ func installWslKernel() error {
 	)
 	backoff := 500 * time.Millisecond
 	for i := 1; i < 6; i++ {
-		err = wutil.SilentExec(wutil.FindWSL(), "--update")
+		err = wutil.SilentExec("wsl", "--update")
 		if err == nil {
 			break
 		}

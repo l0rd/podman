@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -48,7 +49,6 @@ type UnitFileParser struct {
 
 	currentGroup    *unitGroup
 	pendingComments []*unitLine
-	lineNr          int
 }
 
 func newUnitLine(key string, value string, isComment bool) *unitLine {
@@ -205,7 +205,7 @@ func (f *UnitFile) Dup() *UnitFile {
 }
 
 func lineIsComment(line string) bool {
-	return len(line) == 0 || line[0] == '#' || line[0] == ':'
+	return len(line) == 0 || line[0] == '#' || line[0] == ';'
 }
 
 func lineIsGroup(line string) bool {
@@ -347,7 +347,7 @@ func (p *UnitFileParser) parseKeyValuePair(line string) error {
 	return nil
 }
 
-func (p *UnitFileParser) parseLine(line string) error {
+func (p *UnitFileParser) parseLine(line string, lineNr int) error {
 	switch {
 	case lineIsComment(line):
 		return p.parseComment(line)
@@ -356,7 +356,7 @@ func (p *UnitFileParser) parseLine(line string) error {
 	case lineIsKeyValuePair(line):
 		return p.parseKeyValuePair(line)
 	default:
-		return fmt.Errorf("file contains line %d: “%s” which is not a key-value pair, group, or comment", p.lineNr, line)
+		return fmt.Errorf("file contains line %d: “%s” which is not a key-value pair, group, or comment", lineNr, line)
 	}
 }
 
@@ -376,53 +376,39 @@ func (p *UnitFileParser) flushPendingComments(toComment bool) {
 	}
 }
 
-func nextLine(data string, afterPos int) (string, string) {
-	rest := data[afterPos:]
-	if i := strings.Index(rest, "\n"); i >= 0 {
-		return strings.TrimSpace(data[:i+afterPos]), data[i+afterPos+1:]
-	}
-	return data, ""
-}
-
-func trimSpacesFromLines(data string) string {
-	lines := strings.Split(data, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSpace(line)
-	}
-	return strings.Join(lines, "\n")
-}
-
 // Parse an already loaded unit file (in the form of a string)
 func (f *UnitFile) Parse(data string) error {
 	p := &UnitFileParser{
-		file:   f,
-		lineNr: 1,
+		file: f,
 	}
 
-	data = trimSpacesFromLines(data)
+	lines := strings.Split(strings.TrimSuffix(data, "\n"), "\n")
+	remaining := ""
 
-	for len(data) > 0 {
-		origdata := data
-		nLines := 1
-		var line string
-		line, data = nextLine(data, 0)
-
-		if !lineIsComment(line) {
-			// Handle multi-line continuations
-			// Note: This doesn't support comments in the middle of the continuation, which systemd does
-			if lineIsKeyValuePair(line) {
-				for len(data) > 0 && line[len(line)-1] == '\\' {
-					line, data = nextLine(origdata, len(line)+1)
-					nLines++
+	for lineNr, line := range lines {
+		line = strings.TrimSpace(line)
+		if lineIsComment(line) {
+			// ignore the comment is inside a continuation line.
+			if remaining != "" {
+				continue
+			}
+		} else {
+			if strings.HasSuffix(line, "\\") {
+				line = line[:len(line)-1]
+				if lineNr != len(lines)-1 {
+					remaining += line
+					continue
 				}
 			}
+			// check whether the line is a continuation of the previous line
+			if remaining != "" {
+				line = remaining + line
+				remaining = ""
+			}
 		}
-
-		if err := p.parseLine(line); err != nil {
+		if err := p.parseLine(line, lineNr+1); err != nil {
 			return err
 		}
-
-		p.lineNr += nLines
 	}
 
 	if p.currentGroup == nil {
@@ -690,7 +676,6 @@ func (f *UnitFile) LookupInt(groupName string, key string, defaultValue int64) i
 	}
 
 	intVal, err := convertNumber(v)
-
 	if err != nil {
 		return defaultValue
 	}
@@ -854,21 +839,26 @@ func (f *UnitFile) LookupLastArgs(groupName string, key string) ([]string, bool)
 }
 
 // Look up 'Environment' style key-value keys
-func (f *UnitFile) LookupAllKeyVal(groupName string, key string) map[string]string {
+func (f *UnitFile) LookupAllKeyVal(groupName string, key string) (map[string]string, error) {
+	var warnings error
 	res := make(map[string]string)
 	allKeyvals := f.LookupAll(groupName, key)
 	for _, keyvals := range allKeyvals {
 		assigns, err := splitString(keyvals, WhitespaceSeparators, SplitRelax|SplitUnquote|SplitCUnescape)
-		if err == nil {
-			for _, assign := range assigns {
-				key, value, found := strings.Cut(assign, "=")
-				if found {
-					res[key] = value
-				}
+		if err != nil {
+			warnings = errors.Join(warnings, err)
+			continue
+		}
+		for _, assign := range assigns {
+			key, value, found := strings.Cut(assign, "=")
+			if found {
+				res[key] = value
+			} else {
+				warnings = errors.Join(warnings, fmt.Errorf("separator was not found for %s", assign))
 			}
 		}
 	}
-	return res
+	return res, warnings
 }
 
 func (f *UnitFile) Set(groupName string, key string, value string) {

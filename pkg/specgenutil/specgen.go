@@ -354,7 +354,7 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 		if c.NoHealthCheck {
 			return errors.New("cannot specify both --no-healthcheck and --health-cmd")
 		}
-		s.HealthConfig, err = makeHealthCheckFromCli(c.HealthCmd, c.HealthInterval, c.HealthRetries, c.HealthTimeout, c.HealthStartPeriod, false)
+		s.HealthConfig, err = MakeHealthCheckFromCli(c.HealthCmd, c.HealthInterval, c.HealthRetries, c.HealthTimeout, c.HealthStartPeriod, false)
 		if err != nil {
 			return err
 		}
@@ -383,7 +383,7 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 		// The hardcoded "1s" will be discarded, as the startup
 		// healthcheck does not have a period. So just hardcode
 		// something that parses correctly.
-		tmpHcConfig, err := makeHealthCheckFromCli(c.StartupHCCmd, c.StartupHCInterval, c.StartupHCRetries, c.StartupHCTimeout, "1s", true)
+		tmpHcConfig, err := MakeHealthCheckFromCli(c.StartupHCCmd, c.StartupHCInterval, c.StartupHCRetries, c.StartupHCTimeout, "1s", true)
 		if err != nil {
 			return err
 		}
@@ -527,6 +527,10 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 		s.Annotations[define.UserNsAnnotation] = c.UserNS
 	}
 
+	if c.PIDsLimit != nil {
+		s.Annotations[define.PIDsLimitAnnotation] = strconv.FormatInt(*c.PIDsLimit, 10)
+	}
+
 	if len(c.StorageOpts) > 0 {
 		opts := make(map[string]string, len(c.StorageOpts))
 		for _, opt := range c.StorageOpts {
@@ -548,12 +552,6 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 			entrypoint = append(entrypoint, *c.Entrypoint)
 		}
 		s.Entrypoint = entrypoint
-	}
-
-	// Include the command used to create the container.
-
-	if len(s.ContainerCreateCommand) == 0 {
-		s.ContainerCreateCommand = os.Args
 	}
 
 	if len(inputCommand) > 0 {
@@ -587,11 +585,13 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 
 	if c.Net != nil {
 		s.HostAdd = c.Net.AddHosts
+		s.BaseHostsFile = c.Net.HostsFile
 		s.UseImageResolvConf = &c.Net.UseImageResolvConf
 		s.DNSServers = c.Net.DNSServers
 		s.DNSSearch = c.Net.DNSSearch
 		s.DNSOptions = c.Net.DNSOptions
 		s.NetworkOptions = c.Net.NetworkOptions
+		s.UseImageHostname = &c.Net.NoHostname
 		s.UseImageHosts = &c.Net.NoHosts
 	}
 	if len(s.HostUsers) == 0 || len(c.HostUsers) != 0 {
@@ -739,9 +739,7 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 				return fmt.Errorf("invalid systempaths option %q, only `unconfined` is supported", val)
 			}
 		case "unmask":
-			if hasVal {
-				s.ContainerSecurityConfig.Unmask = append(s.ContainerSecurityConfig.Unmask, val)
-			}
+			s.ContainerSecurityConfig.Unmask = append(s.ContainerSecurityConfig.Unmask, strings.Split(val, ":")...)
 		case "no-new-privileges":
 			noNewPrivileges := true
 			if hasVal {
@@ -766,15 +764,15 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 
 	// Only add read-only tmpfs mounts in case that we are read-only and the
 	// read-only tmpfs flag has been set.
-	mounts, volumes, overlayVolumes, imageVolumes, err := parseVolumes(rtc, c.Volume, c.Mount, c.TmpFS)
+	containerMounts, err := parseVolumes(rtc, c.Volume, c.Mount, c.TmpFS)
 	if err != nil {
 		return err
 	}
 	if len(s.Mounts) == 0 || len(c.Mount) != 0 {
-		s.Mounts = mounts
+		s.Mounts = containerMounts.mounts
 	}
 	if len(s.Volumes) == 0 || len(c.Volume) != 0 {
-		s.Volumes = volumes
+		s.Volumes = containerMounts.volumes
 	}
 
 	if s.LabelNested != nil && *s.LabelNested {
@@ -789,10 +787,13 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 	}
 	// TODO make sure these work in clone
 	if len(s.OverlayVolumes) == 0 {
-		s.OverlayVolumes = overlayVolumes
+		s.OverlayVolumes = containerMounts.overlayVolumes
 	}
 	if len(s.ImageVolumes) == 0 {
-		s.ImageVolumes = imageVolumes
+		s.ImageVolumes = containerMounts.imageVolumes
+	}
+	if len(s.ArtifactVolumes) == 0 {
+		s.ArtifactVolumes = containerMounts.artifactVolumes
 	}
 
 	devices := c.Devices
@@ -948,7 +949,7 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions
 	return nil
 }
 
-func makeHealthCheckFromCli(inCmd, interval string, retries uint, timeout, startPeriod string, isStartup bool) (*manifest.Schema2HealthConfig, error) {
+func MakeHealthCheckFromCli(inCmd, interval string, retries uint, timeout, startPeriod string, isStartup bool) (*manifest.Schema2HealthConfig, error) {
 	cmdArr := []string{}
 	isArr := true
 	err := json.Unmarshal([]byte(inCmd), &cmdArr) // array unmarshalling
@@ -1017,7 +1018,6 @@ func makeHealthCheckFromCli(inCmd, interval string, retries uint, timeout, start
 		return nil, errors.New("healthcheck-start-period must be 0 seconds or greater")
 	}
 	hc.StartPeriod = startPeriodDuration
-
 	return &hc, nil
 }
 
@@ -1296,4 +1296,28 @@ func GetResources(s *specgen.SpecGenerator, c *entities.ContainerCreateOptions) 
 		s.ResourceLimits = nil
 	}
 	return s.ResourceLimits, nil
+}
+
+func UpdateMajorAndMinorNumbers(resources *specs.LinuxResources, devicesLimits *define.UpdateContainerDevicesLimits) (*specs.LinuxResources, error) {
+	spec := specgen.SpecGenerator{}
+	spec.ResourceLimits = &specs.LinuxResources{}
+	if resources != nil {
+		spec.ResourceLimits = resources
+	}
+
+	spec.WeightDevice = devicesLimits.GetMapOfLinuxWeightDevice()
+	spec.ThrottleReadBpsDevice = devicesLimits.GetMapOfDeviceReadBPs()
+	spec.ThrottleWriteBpsDevice = devicesLimits.GetMapOfDeviceWriteBPs()
+	spec.ThrottleReadIOPSDevice = devicesLimits.GetMapOfDeviceReadIOPs()
+	spec.ThrottleWriteIOPSDevice = devicesLimits.GetMapOfDeviceWriteIOPs()
+
+	err := specgen.WeightDevices(&spec)
+	if err != nil {
+		return nil, err
+	}
+	err = specgen.FinishThrottleDevices(&spec)
+	if err != nil {
+		return nil, err
+	}
+	return spec.ResourceLimits, nil
 }

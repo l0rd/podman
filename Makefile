@@ -25,6 +25,15 @@ SHELL := $(shell command -v bash;)
 GO ?= go
 GO_LDFLAGS:= $(shell if $(GO) version|grep -q gccgo ; then echo "-gccgoflags"; else echo "-ldflags"; fi)
 GOCMD = CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO)
+# Podman does not work w/o CGO_ENABLED, except in some very specific cases.
+# Windows and Mac (both podman-remote client only) require CGO_ENABLED=0.
+CGO_ENABLED ?= 1
+# Default to the native OS type and architecture unless otherwise specified
+NATIVE_GOOS := $(shell env -u GOOS $(GO) env GOOS)
+GOOS ?= $(call err_if_empty,NATIVE_GOOS)
+# Default to the native architecture type
+NATIVE_GOARCH := $(shell env -u GOARCH $(GO) env GOARCH)
+GOARCH ?= $(NATIVE_GOARCH)
 COVERAGE_PATH ?= .coverage
 DESTDIR ?=
 EPOCH_TEST_COMMIT ?= $(shell git merge-base $${DEST_BRANCH:-main} HEAD)
@@ -48,26 +57,24 @@ SYSTEMDDIR ?= ${LIBDIR}/systemd/system
 USERSYSTEMDDIR ?= ${LIBDIR}/systemd/user
 SYSTEMDGENERATORSDIR ?= ${LIBDIR}/systemd/system-generators
 USERSYSTEMDGENERATORSDIR ?= ${LIBDIR}/systemd/user-generators
-REMOTETAGS ?= remote exclude_graphdriver_btrfs btrfs_noversion exclude_graphdriver_devicemapper containers_image_openpgp
+REMOTETAGS ?= remote exclude_graphdriver_btrfs containers_image_openpgp
 BUILDTAGS ?= \
 	$(shell hack/apparmor_tag.sh) \
 	$(shell hack/btrfs_installed_tag.sh) \
-	$(shell hack/btrfs_tag.sh) \
 	$(shell hack/systemd_tag.sh) \
 	$(shell hack/libsubid_tag.sh) \
-	exclude_graphdriver_devicemapper \
-	seccomp
+	$(if $(filter linux,$(GOOS)), seccomp,)
 # allow downstreams to easily add build tags while keeping our defaults
 BUILDTAGS += ${EXTRA_BUILDTAGS}
 # N/B: This value is managed by Renovate, manual changes are
 # possible, as long as they don't disturb the formatting
 # (i.e. DO NOT ADD A 'v' prefix!)
-GOLANGCI_LINT_VERSION := 1.61.0
+GOLANGCI_LINT_VERSION := 2.1.6
 PYTHON ?= $(shell command -v python3 python|head -n1)
 PKG_MANAGER ?= $(shell command -v dnf yum|head -n1)
 # ~/.local/bin is not in PATH on all systems
 PRE_COMMIT = $(shell command -v bin/venv/bin/pre-commit ~/.local/bin/pre-commit pre-commit | head -n1)
-ifeq ($(shell uname -s),FreeBSD)
+ifeq ($(NATIVE_GOOS),freebsd)
 SED=gsed
 GREP=ggrep
 MAN_L=	mandoc
@@ -86,7 +93,7 @@ endif
 # triggered.
 SOURCES = $(shell find . -path './.*' -prune -o \( \( -name '*.go' -o -name '*.c' \) -a ! -name '*_test.go' \) -print)
 
-BUILDTAGS_CROSS ?= containers_image_openpgp exclude_graphdriver_btrfs exclude_graphdriver_devicemapper exclude_graphdriver_overlay
+BUILDTAGS_CROSS ?= containers_image_openpgp exclude_graphdriver_btrfs exclude_graphdriver_overlay
 CONTAINER_RUNTIME := $(shell command -v podman 2> /dev/null || echo docker)
 OCI_RUNTIME ?= ""
 
@@ -119,6 +126,7 @@ GOFLAGS ?= -trimpath
 LDFLAGS_PODMAN ?= \
 	$(if $(GIT_COMMIT),-X $(LIBPOD)/define.gitCommit=$(GIT_COMMIT),) \
 	$(if $(BUILD_INFO),-X $(LIBPOD)/define.buildInfo=$(BUILD_INFO),) \
+	$(if $(BUILD_ORIGIN),-X "$(LIBPOD)/define.buildOrigin=$(BUILD_ORIGIN)",) \
 	-X $(LIBPOD)/config._installPrefix=$(PREFIX) \
 	-X $(LIBPOD)/config._etcDir=$(ETCDIR) \
 	-X $(PROJECT)/v5/pkg/systemd/quadlet._binDir=$(BINDIR) \
@@ -135,7 +143,7 @@ GINKGOTIMEOUT ?= -timeout=90m
 # By default, run test/e2e
 GINKGOWHAT ?= test/e2e/.
 GINKGO_PARALLEL=y
-GINKGO ?= ./test/tools/build/ginkgo
+GINKGO ?= ./bin/ginkgo
 
 # Allow control over some Ginkgo parameters
 GINKGO_FLAKE_ATTEMPTS ?= 0
@@ -179,15 +187,6 @@ CROSS_BUILD_TARGETS := \
 # Dereference variable $(1), return value if non-empty, otherwise raise an error.
 err_if_empty = $(if $(strip $($(1))),$(strip $($(1))),$(error Required variable $(1) value is undefined, whitespace, or empty))
 
-# Podman does not work w/o CGO_ENABLED, except in some very specific cases.
-# Windows and Mac (both podman-remote client only) require CGO_ENABLED=0.
-CGO_ENABLED ?= 1
-# Default to the native OS type and architecture unless otherwise specified
-NATIVE_GOOS := $(shell env -u GOOS $(GO) env GOOS)
-GOOS ?= $(call err_if_empty,NATIVE_GOOS)
-# Default to the native architecture type
-NATIVE_GOARCH := $(shell env -u GOARCH $(GO) env GOARCH)
-GOARCH ?= $(NATIVE_GOARCH)
 ifeq ($(call err_if_empty,GOOS),windows)
 BINSFX := .exe
 SRCBINDIR := bin/windows
@@ -218,7 +217,7 @@ endif
 
 # gvisor-tap-vsock version for gvproxy.exe and win-sshproxy.exe downloads
 # the upstream project ships pre-built binaries since version 0.7.1
-GV_VERSION=v0.7.5
+GVPROXY_VERSION=$(shell $(GO) list -m -f '{{.Version}}' github.com/containers/gvisor-tap-vsock)
 
 ###
 ### Primary entry-point targets
@@ -231,7 +230,7 @@ default: all
 all: binaries docs
 
 .PHONY: binaries
-ifeq ($(shell uname -s),FreeBSD)
+ifeq ($(GOOS),freebsd)
 binaries: podman podman-remote ## Build podman and podman-remote binaries
 else ifneq (, $(findstring $(GOOS),darwin windows))
 binaries: podman-remote ## Build podman-remote (client) only binaries
@@ -246,7 +245,7 @@ _HLP_TGTS_RX = '^[[:print:]]+:.*?\#\# .*$$'
 _HLP_TGTS_CMD = $(GREP) -E $(_HLP_TGTS_RX) $(MAKEFILE_LIST)
 _HLP_TGTS_LEN = $(shell $(call err_if_empty,_HLP_TGTS_CMD) | cut -d : -f 1 | wc -L 2>/dev/null || echo "PARSING_ERROR")
 # Separated condition for Darwin
-ifeq ($(shell uname -s)$(_HLP_TGTS_LEN),DarwinPARSING_ERROR)
+ifeq ($(NATIVE_GOOS)$(_HLP_TGTS_LEN),darwinPARSING_ERROR)
 ifneq (,$(wildcard /usr/local/bin/gwc))
 _HLP_TGTS_LEN = $(shell $(call err_if_empty,_HLP_TGTS_CMD) | cut -d : -f 1 | gwc -L)
 else
@@ -282,7 +281,7 @@ endif
 
 .PHONY: golangci-lint
 golangci-lint: .install.golangci-lint
-	hack/golangci-lint.sh run
+	hack/golangci-lint.sh
 
 .PHONY: test/checkseccomp/checkseccomp
 test/checkseccomp/checkseccomp: $(wildcard test/checkseccomp/*.go)
@@ -325,7 +324,7 @@ validate: validate-source validate-binaries
 # not automated right now.  The hope is that eventually the quay.io/libpod/fedora_podman is multiarch and can replace this
 # image in the future.
 .PHONY: validatepr
-validatepr:
+validatepr: ## Go Format and lint, which all code changes must pass
 	$(PODMANCMD) run --rm \
 		-v $(CURDIR):/go/src/github.com/containers/podman \
 		--security-opt label=disable \
@@ -348,6 +347,7 @@ vendor:
 	$(GO) mod tidy
 	$(GO) mod vendor
 	$(GO) mod verify
+	$(GO) mod edit -toolchain none
 
 
 # We define *-in-container targets for the following make targets. This allow the targets to be run in a container.
@@ -477,7 +477,7 @@ podman-testing: bin/podman-testing
 ###
 
 .PHONY: generate-bindings
-generate-bindings:
+generate-bindings: .install.golangci-lint
 ifneq ($(GOOS),darwin)
 	$(GOCMD) generate ./pkg/bindings/... ;
 endif
@@ -650,7 +650,7 @@ localunit: test/goecho/goecho test/version/version
 	UNIT=1 $(GINKGO) \
 		-r \
 		$(TESTFLAGS) \
-		--skip-package test/e2e,pkg/bindings,hack,pkg/machine/e2e \
+		--skip-package test/e2e,pkg/bindings,hack,pkg/machine/e2e,pkg/machine/wsl \
 		--cover \
 		--covermode atomic \
 		--coverprofile coverprofile \
@@ -736,8 +736,11 @@ remotesystem:
 			exit 1;\
 		fi;\
 		env PODMAN="$(CURDIR)/bin/podman-remote" bats -T --filter-tags '!ci:parallel' test/system/ ;\
-		env PODMAN="$(CURDIR)/bin/podman-remote" bats -T --filter-tags ci:parallel -j $$(nproc) test/system/ ;\
-		rc=$$?;\
+		rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+		   env PODMAN="$(CURDIR)/bin/podman-remote" bats -T --filter-tags ci:parallel -j $$(nproc) test/system/ ;\
+		   rc=$$?;\
+		fi; \
 		kill %1;\
 	else \
 		echo "Skipping $@: 'timeout -v' unavailable'";\
@@ -844,7 +847,7 @@ podman-remote-release-%.zip: test/version/version ## Build podman-remote for %=$
 		$(MAKE) $(GOPLAT) podman-remote; \
 	fi
 	if [[ "$(GOOS)" == "windows" ]]; then \
-		$(MAKE) $(GOPLAT) TMPDIR="" win-gvproxy; \
+		$(MAKE) $(GOPLAT) TMPDIR="" win-gvproxy-$(GOARCH); \
 	fi
 	if [[ "$(GOOS)" == "darwin" ]]; then \
 		$(MAKE) $(GOPLAT) podman-mac-helper;\
@@ -857,12 +860,17 @@ podman-remote-release-%.zip: test/version/version ## Build podman-remote for %=$
 	if [[ "$(GOARCH)" != "$(NATIVE_GOARCH)" ]]; then $(MAKE) clean-binaries; fi
 	-rm -rf "$(tmpsubdir)"
 
-# Downloads pre-built gvproxy and win-sshproxy helpers. See comment on GV_VERSION declaration
+# Downloads pre-built gvproxy and win-sshproxy helpers. See comment on GVPROXY_VERSION declaration
 .PHONY: win-gvproxy
-win-gvproxy: test/version/version
+win-gvproxy: win-gvproxy-amd64 # Keep this target for backwards compatibility
+
+win-gvproxy-%: test/version/version
+	$(eval GOARCH := $*)
+	$(eval GVPROXY_FILENAME := $(if $(filter arm64,$(GOARCH)), gvproxy-windows-arm64.exe,gvproxy-windowsgui.exe))
+	$(eval SSHPROXY_FILENAME :=  $(if $(filter arm64,$(GOARCH)), win-sshproxy-arm64.exe, win-sshproxy.exe))
 	mkdir -p bin/windows/
-	curl -sSL -o bin/windows/gvproxy.exe --retry 5 https://github.com/containers/gvisor-tap-vsock/releases/download/$(GV_VERSION)/gvproxy-windowsgui.exe
-	curl -sSL -o bin/windows/win-sshproxy.exe --retry 5 https://github.com/containers/gvisor-tap-vsock/releases/download/$(GV_VERSION)/win-sshproxy.exe
+	curl -sSL -o bin/windows/gvproxy.exe --retry 5 https://github.com/containers/gvisor-tap-vsock/releases/download/$(GVPROXY_VERSION)/$(GVPROXY_FILENAME)
+	curl -sSL -o bin/windows/win-sshproxy.exe --retry 5 https://github.com/containers/gvisor-tap-vsock/releases/download/$(GVPROXY_VERSION)/$(SSHPROXY_FILENAME)
 
 .PHONY: rpm
 rpm:  ## Build rpm packages
@@ -910,7 +918,7 @@ install.bin:
 	ln -sf podman $(DESTDIR)$(BINDIR)/podmansh
 	test -z "${SELINUXOPT}" || chcon --verbose --reference=$(DESTDIR)$(BINDIR)/podman bin/podman
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(LIBEXECPODMAN)
-ifneq ($(shell uname -s),FreeBSD)
+ifneq ($(NATIVE_GOOS),freebsd)
 	install ${SELINUXOPT} -m 755 bin/rootlessport $(DESTDIR)$(LIBEXECPODMAN)/rootlessport
 	test -z "${SELINUXOPT}" || chcon --verbose --reference=$(DESTDIR)$(LIBEXECPODMAN)/rootlessport bin/rootlessport
 	install ${SELINUXOPT} -m 755 bin/quadlet $(DESTDIR)$(LIBEXECPODMAN)/quadlet
@@ -960,7 +968,7 @@ install.completions:
 install.docker:
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(BINDIR)
 	$(eval INTERPOLATED_DOCKER_SCRIPT := $(shell mktemp))
-	env BINDIR=${BINDIR} ETCDIR=${ETCDIR} envsubst < docker/docker.in > ${INTERPOLATED_DOCKER_SCRIPT}
+	env BINDIR=${BINDIR} ETCDIR=${ETCDIR} envsubst '$$BINDIR;$$ETCDIR' < docker/docker.in > ${INTERPOLATED_DOCKER_SCRIPT}
 	install ${SELINUXOPT} -m 755 ${INTERPOLATED_DOCKER_SCRIPT} $(DESTDIR)$(BINDIR)/docker
 	rm ${INTERPOLATED_DOCKER_SCRIPT}
 	install ${SELINUXOPT} -m 755 -d $(DESTDIR)${SYSTEMDDIR}  $(DESTDIR)${USERSYSTEMDDIR} $(DESTDIR)${TMPFILESDIR} $(DESTDIR)${USERTMPFILESDIR}
@@ -1000,6 +1008,13 @@ install.systemd: $(PODMAN_GENERATED_UNIT_FILES)
 		install ${SELINUXOPT} -m 644 $$unit $(DESTDIR)${USERSYSTEMDDIR}/$$(basename $$unit); \
 		install ${SELINUXOPT} -m 644 $$unit $(DESTDIR)${SYSTEMDDIR}/$$(basename $$unit); \
 	done
+	# HACK; as rootless this unit will not work due the requires on a non existing target
+	# as the user session does not see system units. We could define two different units
+	# but this seems much more complicated then this small fixup here.
+	# https://github.com/containers/podman/issues/23790
+	sed -i '/Requires=/d' $(DESTDIR)${USERSYSTEMDDIR}/podman-clean-transient.service
+	sed -i '/After=/d' $(DESTDIR)${USERSYSTEMDDIR}/podman-clean-transient.service
+
 	# Important this unit should only be installed for the user session and is thus not added to the loop above.
 	install ${SELINUXOPT} -m 644 contrib/systemd/user/podman-user-wait-network-online.service \
 		$(DESTDIR)${USERSYSTEMDDIR}/podman-user-wait-network-online.service
@@ -1012,13 +1027,9 @@ endif
 install.tools: .install.golangci-lint ## Install needed tools
 	$(MAKE) -C test/tools
 
-.PHONY: .install.goimports
-.install.goimports:
-	$(MAKE) -C test/tools build/goimports
-
 .PHONY: .install.ginkgo
 .install.ginkgo:
-	$(MAKE) -C test/tools build/ginkgo
+	$(GO) build -o $(GINKGO) ./vendor/github.com/onsi/ginkgo/v2/ginkgo
 
 .PHONY: .install.gitvalidation
 .install.gitvalidation:
@@ -1053,12 +1064,13 @@ release-artifacts: clean-binaries
 	mv podman-remote-release-darwin_arm64.zip release/
 	$(MAKE) podman-remote-release-windows_amd64.zip
 	mv podman-remote-release-windows_amd64.zip release/
+	$(MAKE) podman-remote-release-windows_arm64.zip
+	mv podman-remote-release-windows_arm64.zip release/
 	$(MAKE) podman-remote-static-linux_amd64
 	tar -cvzf podman-remote-static-linux_amd64.tar.gz bin/podman-remote-static-linux_amd64
 	$(MAKE) podman-remote-static-linux_arm64
 	tar -cvzf podman-remote-static-linux_arm64.tar.gz bin/podman-remote-static-linux_arm64
 	mv podman-remote-static-linux*.tar.gz release/
-	cd release/; sha256sum *.zip *.tar.gz > shasums
 
 .PHONY: uninstall
 uninstall:

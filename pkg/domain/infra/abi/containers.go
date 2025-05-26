@@ -35,6 +35,7 @@ import (
 	"github.com/containers/podman/v5/pkg/specgenutil"
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/containers/storage"
+	"github.com/containers/storage/pkg/unshare"
 	"github.com/containers/storage/types"
 	"github.com/hashicorp/go-multierror"
 	"github.com/sirupsen/logrus"
@@ -299,7 +300,7 @@ func (ic *ContainerEngine) ContainerStop(ctx context.Context, namesOrIds []strin
 				// Issue #7384 and #11384: If the container is configured for
 				// auto-removal, it might already have been removed at this point.
 				// We still need to clean up since we do not know if the other cleanup process is successful
-				if !(errors.Is(err, define.ErrNoSuchCtr) || errors.Is(err, define.ErrCtrRemoved)) {
+				if !errors.Is(err, define.ErrNoSuchCtr) && !errors.Is(err, define.ErrCtrRemoved) {
 					return err
 				}
 			}
@@ -497,7 +498,7 @@ func (ic *ContainerEngine) ContainerRm(ctx context.Context, namesOrIds []string,
 	for ctr, err := range ctrsMap {
 		report := new(reports.RmReport)
 		report.Id = ctr
-		if !(errors.Is(err, define.ErrNoSuchCtr) || errors.Is(err, define.ErrCtrRemoved)) {
+		if !errors.Is(err, define.ErrNoSuchCtr) && !errors.Is(err, define.ErrCtrRemoved) {
 			report.Err = err
 		}
 		report.RawInput = idToRawInput[ctr]
@@ -957,6 +958,12 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 	for i := range containers {
 		ctr := containers[i]
 
+		removeContainer := func() {
+			if _, _, err := ic.removeContainer(ctx, ctr.Container, entities.RmOptions{}); err != nil {
+				logrus.Errorf("Removing container %s: %v", ctr.ID(), err)
+			}
+		}
+
 		if options.Attach {
 			err = terminal.StartAttachCtr(ctx, ctr.Container, options.Stdout, options.Stderr, options.Stdin, options.DetachKeys, options.SigProxy, true)
 			if errors.Is(err, define.ErrDetach) {
@@ -990,9 +997,7 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 					ExitCode: exitCode,
 				})
 				if ctr.AutoRemove() {
-					if _, _, err := ic.removeContainer(ctx, ctr.Container, entities.RmOptions{}); err != nil {
-						logrus.Errorf("Removing container %s: %v", ctr.ID(), err)
-					}
+					removeContainer()
 				}
 				return reports, fmt.Errorf("unable to start container %s: %w", ctr.ID(), err)
 			}
@@ -1000,6 +1005,9 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 			exitCode, err2 := ic.ContainerWaitForExitCode(ctx, ctr.Container)
 			if err2 != nil {
 				logrus.Errorf("Waiting for container %s: %v", ctr.ID(), err2)
+			}
+			if ctr.AutoRemove() && !ctr.ShouldRestart(ctx) {
+				removeContainer()
 			}
 			reports = append(reports, &entities.ContainerStartReport{
 				Id:       ctr.ID(),
@@ -1037,9 +1045,7 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 			}
 			report.Err = fmt.Errorf("unable to start container %q: %w", ctr.ID(), err)
 			if ctr.AutoRemove() {
-				if _, _, err := ic.removeContainer(ctx, ctr.Container, entities.RmOptions{}); err != nil {
-					logrus.Errorf("Removing container %s: %v", ctr.ID(), err)
-				}
+				removeContainer()
 			}
 			reports = append(reports, report)
 			continue
@@ -1361,7 +1367,11 @@ func (ic *ContainerEngine) ContainerInit(ctx context.Context, namesOrIds []strin
 }
 
 func (ic *ContainerEngine) ContainerMount(ctx context.Context, nameOrIDs []string, options entities.ContainerMountOptions) ([]*entities.ContainerMountReport, error) {
-	if os.Geteuid() != 0 {
+	hasCapSysAdmin, err := unshare.HasCapSysAdmin()
+	if err != nil {
+		return nil, err
+	}
+	if os.Geteuid() != 0 || !hasCapSysAdmin {
 		if driver := ic.Libpod.StorageConfig().GraphDriverName; driver != "vfs" {
 			// Do not allow to mount a graphdriver that is not vfs if we are creating the userns as part
 			// of the mount command.
@@ -1633,7 +1643,8 @@ func (ic *ContainerEngine) ContainerStats(ctx context.Context, namesOrIds []stri
 						// update the container state
 						// https://github.com/containers/podman/issues/23334
 						(errors.Is(err, define.ErrCtrRemoved) || errors.Is(err, define.ErrNoSuchCtr) ||
-							errors.Is(err, define.ErrCtrStateInvalid) || errors.Is(err, define.ErrCtrStopped)) {
+							errors.Is(err, define.ErrCtrStateInvalid) || errors.Is(err, define.ErrCtrStopped) ||
+							errors.Is(err, define.ErrNoCgroups)) {
 						continue
 					}
 					return nil, err
@@ -1727,6 +1738,11 @@ func (ic *ContainerEngine) ContainerClone(ctx context.Context, ctrCloneOpts enti
 		}
 	}
 
+	ctrCloneOpts.CreateOpts.HealthOnFailure = spec.HealthCheckOnFailureAction.String()
+	ctrCloneOpts.CreateOpts.HealthLogDestination = spec.HealthLogDestination
+	ctrCloneOpts.CreateOpts.HealthMaxLogCount = spec.HealthMaxLogCount
+	ctrCloneOpts.CreateOpts.HealthMaxLogSize = spec.HealthMaxLogSize
+
 	err = specgenutil.FillOutSpecGen(spec, &ctrCloneOpts.CreateOpts, []string{})
 	if err != nil {
 		return nil, err
@@ -1759,10 +1775,6 @@ func (ic *ContainerEngine) ContainerClone(ctx context.Context, ctrCloneOpts enti
 		spec.Name = generate.CheckName(ic.Libpod, n, true)
 	}
 
-	spec.HealthLogDestination = define.DefaultHealthCheckLocalDestination
-	spec.HealthMaxLogCount = define.DefaultHealthMaxLogCount
-	spec.HealthMaxLogSize = define.DefaultHealthMaxLogSize
-
 	rtSpec, spec, opts, err := generate.MakeContainer(context.Background(), ic.Libpod, spec, true, c)
 	if err != nil {
 		return nil, err
@@ -1791,14 +1803,7 @@ func (ic *ContainerEngine) ContainerClone(ctx context.Context, ctrCloneOpts enti
 
 // ContainerUpdate finds and updates the given container's cgroup config with the specified options
 func (ic *ContainerEngine) ContainerUpdate(ctx context.Context, updateOptions *entities.ContainerUpdateOptions) (string, error) {
-	err := specgen.WeightDevices(updateOptions.Specgen)
-	if err != nil {
-		return "", err
-	}
-	err = specgen.FinishThrottleDevices(updateOptions.Specgen)
-	if err != nil {
-		return "", err
-	}
+	updateOptions.ProcessSpecgen()
 	containers, err := getContainers(ic.Libpod, getContainersOptions{names: []string{updateOptions.NameOrID}})
 	if err != nil {
 		return "", err
@@ -1806,13 +1811,14 @@ func (ic *ContainerEngine) ContainerUpdate(ctx context.Context, updateOptions *e
 	if len(containers) != 1 {
 		return "", fmt.Errorf("container not found")
 	}
+	container := containers[0].Container
 
-	var restartPolicy *string
-	if updateOptions.Specgen.RestartPolicy != "" {
-		restartPolicy = &updateOptions.Specgen.RestartPolicy
+	updateOptions.Resources, err = specgenutil.UpdateMajorAndMinorNumbers(updateOptions.Resources, updateOptions.DevicesLimits)
+	if err != nil {
+		return "", err
 	}
 
-	if err = containers[0].Update(updateOptions.Specgen.ResourceLimits, restartPolicy, updateOptions.Specgen.RestartRetries); err != nil {
+	if err = container.Update(updateOptions); err != nil {
 		return "", err
 	}
 	return containers[0].ID(), nil

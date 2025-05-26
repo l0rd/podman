@@ -60,6 +60,38 @@ var _ = Describe("Podman exec", func() {
 		Expect(session).Should(ExitCleanly())
 	})
 
+	It("podman exec simple command using cidfile", func() {
+		cidFile := filepath.Join(tempdir, "cid")
+		session := podmanTest.RunTopContainerWithArgs("test1", []string{"--cidfile", cidFile})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		Expect(podmanTest.NumberOfContainers()).To(Equal(1))
+
+		result := podmanTest.Podman([]string{"exec", "--cidfile", cidFile, "ls"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(ExitCleanly())
+	})
+
+	It("podman exec latest and cidfile", func() {
+		SkipIfRemote("--latest flag n/a")
+
+		cidFile := filepath.Join(tempdir, "cid")
+		session := podmanTest.RunTopContainerWithArgs("test1", []string{"--cidfile", cidFile})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		Expect(podmanTest.NumberOfContainers()).To(Equal(1))
+
+		result := podmanTest.Podman([]string{"exec", "--cidfile", cidFile, "--latest", "ls"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(ExitWithError(125, `--latest and --cidfile can not be used together`))
+	})
+
+	It("podman exec nonextant cidfile", func() {
+		session := podmanTest.Podman([]string{"exec", "--cidfile", "foobar", "ls"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitWithError(125, `reading CIDFile: open foobar: no such file or directory`))
+	})
+
 	It("podman exec environment test", func() {
 		setup := podmanTest.RunTopContainer("test1")
 		setup.WaitWithDefaultTimeout()
@@ -400,17 +432,14 @@ var _ = Describe("Podman exec", func() {
 		setup.WaitWithDefaultTimeout()
 		Expect(setup).Should(ExitCleanly())
 
-		expect := "chdir to `/missing`: No such file or directory"
-		if podmanTest.OCIRuntime == "runc" {
-			expect = "chdir to cwd"
-		}
+		expect := ".*(chdir to cwd|chdir to `/missing`: No such file or directory).*"
 		session := podmanTest.Podman([]string{"exec", "--workdir", "/missing", "test1", "pwd"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).To(ExitWithError(127, expect))
+		Expect(session).To(ExitWithErrorRegex(127, expect))
 
 		session = podmanTest.Podman([]string{"exec", "-w", "/missing", "test1", "pwd"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).To(ExitWithError(127, expect))
+		Expect(session).To(ExitWithErrorRegex(127, expect))
 	})
 
 	It("podman exec cannot be invoked", func() {
@@ -421,19 +450,20 @@ var _ = Describe("Podman exec", func() {
 		session := podmanTest.Podman([]string{"exec", "test1", "/etc"})
 		session.WaitWithDefaultTimeout()
 
-		// crun (and, we hope, any other future runtimes)
-		expectedStatus := 126
-		expectedMessage := "open executable: Operation not permitted: OCI permission denied"
-
 		// ...but it's much more complicated under runc (#19552)
 		if podmanTest.OCIRuntime == "runc" {
-			expectedMessage = `exec failed: unable to start container process: exec: "/etc": is a directory`
-			expectedStatus = 255
+			expectedMessage := `exec failed: unable to start container process: exec: "/etc": is a directory`
+			expectedStatus := 255
 			if IsRemote() {
 				expectedStatus = 125
 			}
+			Expect(session).Should(ExitWithError(expectedStatus, expectedMessage))
+		} else {
+			// crun (and, we hope, any other future runtimes)
+			expectedStatus := 126
+			expectedMessage := ".*(open executable|the path `/etc` is not a regular file): Operation not permitted: OCI permission denied.*"
+			Expect(session).Should(ExitWithErrorRegex(expectedStatus, expectedMessage))
 		}
-		Expect(session).Should(ExitWithError(expectedStatus, expectedMessage))
 	})
 
 	It("podman exec command not found", func() {
@@ -457,9 +487,9 @@ var _ = Describe("Podman exec", func() {
 		files := []*os.File{
 			devNull,
 		}
-		session := podmanTest.PodmanExtraFiles([]string{"exec", "--preserve-fds", "1", "test1", "ls"}, files)
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(ExitCleanly())
+		podmanTest.PodmanExitCleanlyWithOptions(PodmanExecOptions{
+			ExtraFiles: files,
+		}, "exec", "--preserve-fds", "1", "test1", "ls")
 	})
 
 	It("podman exec preserves --group-add groups", func() {

@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -35,17 +37,18 @@ import (
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/common/pkg/hooks"
 	hooksExec "github.com/containers/common/pkg/hooks/exec"
+	"github.com/containers/image/v5/types"
 	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/containers/storage/pkg/ioutils"
 	"github.com/containers/storage/pkg/lockfile"
+	"github.com/containers/storage/pkg/mount"
 	"github.com/containers/storage/pkg/stringid"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/docker/go-units"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/runtime-tools/generate"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/exp/slices"
 	"golang.org/x/sys/unix"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 	"tags.cncf.io/container-device-interface/pkg/parser"
@@ -165,6 +168,24 @@ func separateDevicesFromRuntimeSpec(g *generate.Generator) define.ContainerDevic
 
 // Run runs the specified command in the container's root filesystem.
 func (b *Builder) Run(command []string, options RunOptions) error {
+	var runArtifacts *runMountArtifacts
+	if len(options.ExternalImageMounts) > 0 {
+		defer func() {
+			if runArtifacts == nil {
+				// we didn't add ExternalImageMounts to the
+				// list of images that we're going to unmount
+				// yet and make a deferred call that cleans
+				// them up, but the caller is expecting us to
+				// unmount these for them because we offered to
+				for _, image := range options.ExternalImageMounts {
+					if _, err := b.store.UnmountImage(image, false); err != nil {
+						logrus.Debugf("umounting image %q: %v", image, err)
+					}
+				}
+			}
+		}()
+	}
+
 	if os.Getenv("container") != "" {
 		os, arch, variant, err := parse.Platform("")
 		if err != nil {
@@ -237,6 +258,10 @@ func (b *Builder) Run(command []string, options RunOptions) error {
 		workDir = options.WorkingDir
 	} else if b.WorkDir() != "" {
 		g.SetProcessCwd(b.WorkDir())
+		workDir = b.WorkDir()
+	}
+	if workDir == "" {
+		workDir = string(os.PathSeparator)
 	}
 	setupSelinux(g, b.ProcessLabel, b.MountLabel)
 	mountPoint, err := b.Mount(b.MountLabel)
@@ -257,7 +282,7 @@ func (b *Builder) Run(command []string, options RunOptions) error {
 	}
 
 	// Combine the working container's set of devices with the ones for just this run.
-	deviceSpecs := append(append([]string{}, options.DeviceSpecs...), b.DeviceSpecs...)
+	deviceSpecs := slices.Concat(options.DeviceSpecs, b.DeviceSpecs)
 	deviceSpecs, err = b.cdiSetupDevicesInSpec(deviceSpecs, options.CDIConfigDir, g.Config) // makes changes to more than just the device list
 	if err != nil {
 		return err
@@ -278,7 +303,7 @@ func (b *Builder) Run(command []string, options RunOptions) error {
 		// We are going to create bind mounts for devices
 		// but we need to make sure that we don't override
 		// anything which is already in OCI spec.
-		mounts := make(map[string]interface{})
+		mounts := make(map[string]any)
 		for _, m := range g.Mounts() {
 			mounts[m.Destination] = true
 		}
@@ -324,7 +349,7 @@ func (b *Builder) Run(command []string, options RunOptions) error {
 		}
 	}
 
-	setupMaskedPaths(g)
+	setupMaskedPaths(g, b.CommonBuildOpts)
 	setupReadOnlyPaths(g)
 
 	setupTerminal(g, options.Terminal, options.TerminalSize)
@@ -432,7 +457,7 @@ func (b *Builder) Run(command []string, options RunOptions) error {
 	}
 
 	resolvFile := ""
-	if !slices.Contains(volumes, resolvconf.DefaultResolvConf) && options.ConfigureNetwork != define.NetworkDisabled && !(len(b.CommonBuildOpts.DNSServers) == 1 && strings.ToLower(b.CommonBuildOpts.DNSServers[0]) == "none") {
+	if !slices.Contains(volumes, resolvconf.DefaultResolvConf) && options.ConfigureNetwork != define.NetworkDisabled && (len(b.CommonBuildOpts.DNSServers) != 1 || strings.ToLower(b.CommonBuildOpts.DNSServers[0]) != "none") {
 		resolvFile, err = b.createResolvConf(path, rootIDPair)
 		if err != nil {
 			return err
@@ -494,7 +519,7 @@ rootless=%d
 		SystemContext:    options.SystemContext,
 	}
 
-	runArtifacts, err := b.setupMounts(mountPoint, spec, path, options.Mounts, bindFiles, volumes, options.CompatBuiltinVolumes, b.CommonBuildOpts.Volumes, options.RunMounts, runMountInfo)
+	runArtifacts, err = b.setupMounts(mountPoint, spec, path, options.Mounts, bindFiles, volumes, options.CompatBuiltinVolumes, b.CommonBuildOpts.Volumes, options.RunMounts, runMountInfo)
 	if err != nil {
 		return fmt.Errorf("resolving mountpoints for container %q: %w", b.ContainerID, err)
 	}
@@ -511,7 +536,7 @@ rootless=%d
 	}
 
 	defer func() {
-		if err := b.cleanupRunMounts(options.SystemContext, mountPoint, runArtifacts); err != nil {
+		if err := b.cleanupRunMounts(mountPoint, runArtifacts); err != nil {
 			options.Logger.Errorf("unable to cleanup run mounts %v", err)
 		}
 	}()
@@ -527,7 +552,7 @@ rootless=%d
 		err = b.runUsingRuntimeSubproc(isolation, options, configureNetwork, networkString, moreCreateArgs, spec,
 			mountPoint, path, define.Package+"-"+filepath.Base(path), b.Container, hostsFile, resolvFile)
 	case IsolationChroot:
-		err = chroot.RunUsingChroot(spec, path, homeDir, options.Stdin, options.Stdout, options.Stderr)
+		err = chroot.RunUsingChroot(spec, path, homeDir, options.Stdin, options.Stdout, options.Stderr, options.NoPivot)
 	case IsolationOCIRootless:
 		moreCreateArgs := []string{"--no-new-keyring"}
 		if options.NoPivot {
@@ -562,9 +587,7 @@ func (b *Builder) setupOCIHooks(config *specs.Spec, hasVolumes bool) (map[string
 			if len(ociHooks) > 0 || config.Hooks != nil {
 				logrus.Warnf("Implicit hook directories are deprecated; set --hooks-dir=%q explicitly to continue to load ociHooks from this directory", hDir)
 			}
-			for i, hook := range ociHooks {
-				allHooks[i] = hook
-			}
+			maps.Copy(allHooks, ociHooks)
 		}
 	} else {
 		manager, err := hooks.New(context.Background(), b.CommonBuildOpts.OCIHooksDir, []string{})
@@ -667,9 +690,9 @@ func setupSlirp4netnsNetwork(config *config.Config, netns, cid string, options, 
 	}
 
 	return func() {
-		syscall.Kill(res.Pid, syscall.SIGKILL) // nolint:errcheck
+		syscall.Kill(res.Pid, syscall.SIGKILL) //nolint:errcheck
 		var status syscall.WaitStatus
-		syscall.Wait4(res.Pid, &status, 0, nil) // nolint:errcheck
+		syscall.Wait4(res.Pid, &status, 0, nil) //nolint:errcheck
 	}, result, nil
 }
 
@@ -967,7 +990,17 @@ func (b *Builder) configureNamespaces(g *generate.Generator, options *RunOptions
 		} else if b.Hostname() != "" {
 			g.SetHostname(b.Hostname())
 		} else {
-			g.SetHostname(stringid.TruncateID(b.ContainerID))
+			hostname := stringid.TruncateID(b.ContainerID)
+			defConfig, err := config.Default()
+			if err != nil {
+				return false, "", fmt.Errorf("failed to get container config: %w", err)
+			}
+			if defConfig.Containers.ContainerNameAsHostName {
+				if mapped := mapContainerNameToHostname(b.Container); mapped != "" {
+					hostname = mapped
+				}
+			}
+			g.SetHostname(hostname)
 		}
 	} else {
 		g.SetHostname("")
@@ -1028,28 +1061,28 @@ func addRlimits(ulimit []string, g *generate.Generator, defaultUlimits []string)
 		g.AddProcessRlimits("RLIMIT_"+strings.ToUpper(ul.Name), uint64(ul.Hard), uint64(ul.Soft))
 	}
 	if !nofileSet {
-		max := define.RLimitDefaultValue
+		lim := define.RLimitDefaultValue
 		var rlimit unix.Rlimit
 		if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &rlimit); err == nil {
-			if max < rlimit.Max || unshare.IsRootless() {
-				max = rlimit.Max
+			if lim < rlimit.Max || unshare.IsRootless() {
+				lim = rlimit.Max
 			}
 		} else {
 			logrus.Warnf("Failed to return RLIMIT_NOFILE ulimit %q", err)
 		}
-		g.AddProcessRlimits("RLIMIT_NOFILE", max, max)
+		g.AddProcessRlimits("RLIMIT_NOFILE", lim, lim)
 	}
 	if !nprocSet {
-		max := define.RLimitDefaultValue
+		lim := define.RLimitDefaultValue
 		var rlimit unix.Rlimit
 		if err := unix.Getrlimit(unix.RLIMIT_NPROC, &rlimit); err == nil {
-			if max < rlimit.Max || unshare.IsRootless() {
-				max = rlimit.Max
+			if lim < rlimit.Max || unshare.IsRootless() {
+				lim = rlimit.Max
 			}
 		} else {
 			logrus.Warnf("Failed to return RLIMIT_NPROC ulimit %q", err)
 		}
-		g.AddProcessRlimits("RLIMIT_NPROC", max, max)
+		g.AddProcessRlimits("RLIMIT_NPROC", lim, lim)
 	}
 
 	return nil
@@ -1137,7 +1170,7 @@ func (b *Builder) runSetupVolumeMounts(mountLabel string, volumeMounts []string,
 				RootGID:                idMaps.rootGID,
 				UpperDirOptionFragment: upperDir,
 				WorkDirOptionFragment:  workDir,
-				GraphOpts:              b.store.GraphOptions(),
+				GraphOpts:              slices.Clone(b.store.GraphOptions()),
 			}
 
 			overlayMount, err := overlay.MountWithOptions(contentDir, host, container, &overlayOpts)
@@ -1146,7 +1179,7 @@ func (b *Builder) runSetupVolumeMounts(mountLabel string, volumeMounts []string,
 			}
 
 			// If chown true, add correct ownership to the overlay temp directories.
-			if foundU {
+			if err == nil && foundU {
 				if err := chown.ChangeHostPathOwnership(contentDir, true, idMaps.processUID, idMaps.processGID); err != nil {
 					return specs.Mount{}, err
 				}
@@ -1195,8 +1228,22 @@ func (b *Builder) runSetupVolumeMounts(mountLabel string, volumeMounts []string,
 	return mounts, nil
 }
 
-func setupMaskedPaths(g *generate.Generator) {
-	for _, mp := range config.DefaultMaskedPaths {
+func setupMaskedPaths(g *generate.Generator, opts *define.CommonBuildOptions) {
+	if slices.Contains(opts.Unmasks, "all") {
+		return
+	}
+nextMaskedPath:
+	for _, mp := range append(config.DefaultMaskedPaths(), opts.Masks...) {
+		for _, unmask := range opts.Unmasks {
+			match, err := filepath.Match(unmask, mp)
+			if err != nil {
+				logrus.Warnf("Invalid unmask pattern %q: %v", unmask, err)
+				continue
+			}
+			if match {
+				continue nextMaskedPath
+			}
+		}
 		g.AddLinuxMaskedPaths(mp)
 	}
 }
@@ -1398,24 +1445,52 @@ func checkIDsGreaterThan5(ids []specs.LinuxIDMapping) bool {
 	return false
 }
 
-// If this function succeeds and returns a non-nil *lockfile.LockFile, the caller must unlock it (when??).
-func (b *Builder) getCacheMount(tokens []string, stageMountPoints map[string]internal.StageMountDetails, idMaps IDMaps, workDir string) (*specs.Mount, *lockfile.LockFile, error) {
+// Returns a Mount to add to the runtime spec's list of mounts, the ID of an
+// image, the path to a mounted filesystem, and the path to an overlay
+// filesystem, and an optional lock, or an error.
+//
+// The caller is expected to, after the command which uses the mount exits,
+// clean up the overlay filesystem (if we returned one), unmount the mounted
+// filesystem (if we provided the path to its mountpoint) and remove its
+// mountpoint, unmount the image (if we mounted one), and release the lock (if
+// we took one).
+func (b *Builder) getCacheMount(tokens []string, sys *types.SystemContext, stageMountPoints map[string]internal.StageMountDetails, idMaps IDMaps, workDir, tmpDir string) (*specs.Mount, string, string, string, *lockfile.LockFile, error) {
 	var optionMounts []specs.Mount
-	mount, targetLock, err := volumes.GetCacheMount(tokens, b.store, b.MountLabel, stageMountPoints, workDir)
+	optionMount, mountedImage, intermediateMount, overlayMount, targetLock, err := volumes.GetCacheMount(sys, tokens, b.store, b.MountLabel, stageMountPoints, idMaps.uidmap, idMaps.gidmap, workDir, tmpDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", "", "", nil, err
 	}
 	succeeded := false
 	defer func() {
-		if !succeeded && targetLock != nil {
-			targetLock.Unlock()
+		if !succeeded {
+			if overlayMount != "" {
+				if err := overlay.RemoveTemp(overlayMount); err != nil {
+					b.Logger.Debug(err.Error())
+				}
+			}
+			if intermediateMount != "" {
+				if err := mount.Unmount(intermediateMount); err != nil {
+					b.Logger.Debugf("unmounting %q: %v", intermediateMount, err)
+				}
+				if err := os.Remove(intermediateMount); err != nil {
+					b.Logger.Debugf("removing should-be-empty directory %q: %v", intermediateMount, err)
+				}
+			}
+			if mountedImage != "" {
+				if _, err := b.store.UnmountImage(mountedImage, false); err != nil {
+					b.Logger.Debugf("unmounting image %q: %v", mountedImage, err)
+				}
+			}
+			if targetLock != nil {
+				targetLock.Unlock()
+			}
 		}
 	}()
-	optionMounts = append(optionMounts, mount)
+	optionMounts = append(optionMounts, optionMount)
 	volumes, err := b.runSetupVolumeMounts(b.MountLabel, nil, optionMounts, idMaps)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", "", "", nil, err
 	}
 	succeeded = true
-	return &volumes[0], targetLock, nil
+	return &volumes[0], mountedImage, intermediateMount, overlayMount, targetLock, nil
 }

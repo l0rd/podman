@@ -3,7 +3,6 @@ package storage
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -83,7 +82,7 @@ type Container struct {
 	UIDMap []idtools.IDMap `json:"uidmap,omitempty"`
 	GIDMap []idtools.IDMap `json:"gidmap,omitempty"`
 
-	Flags map[string]interface{} `json:"flags,omitempty"`
+	Flags map[string]any `json:"flags,omitempty"`
 
 	// volatileStore is true if the container is from the volatile json file
 	volatileStore bool `json:"-"`
@@ -164,17 +163,17 @@ type containerStore struct {
 func copyContainer(c *Container) *Container {
 	return &Container{
 		ID:             c.ID,
-		Names:          copyStringSlice(c.Names),
+		Names:          copySlicePreferringNil(c.Names),
 		ImageID:        c.ImageID,
 		LayerID:        c.LayerID,
 		Metadata:       c.Metadata,
-		BigDataNames:   copyStringSlice(c.BigDataNames),
-		BigDataSizes:   maps.Clone(c.BigDataSizes),
-		BigDataDigests: maps.Clone(c.BigDataDigests),
+		BigDataNames:   copySlicePreferringNil(c.BigDataNames),
+		BigDataSizes:   copyMapPreferringNil(c.BigDataSizes),
+		BigDataDigests: copyMapPreferringNil(c.BigDataDigests),
 		Created:        c.Created,
-		UIDMap:         copyIDMap(c.UIDMap),
-		GIDMap:         copyIDMap(c.GIDMap),
-		Flags:          maps.Clone(c.Flags),
+		UIDMap:         copySlicePreferringNil(c.UIDMap),
+		GIDMap:         copySlicePreferringNil(c.GIDMap),
+		Flags:          copyMapPreferringNil(c.Flags),
 		volatileStore:  c.volatileStore,
 	}
 }
@@ -197,7 +196,7 @@ func (c *Container) MountOpts() []string {
 	switch value := c.Flags[mountOptsFlag].(type) {
 	case []string:
 		return value
-	case []interface{}:
+	case []any:
 		var mountOpts []string
 		for _, v := range value {
 			if flag, ok := v.(string); ok {
@@ -459,7 +458,7 @@ func (r *containerStore) load(lockedForWriting bool) (bool, error) {
 
 	ids := make(map[string]*Container)
 
-	for locationIndex := 0; locationIndex < numContainerLocationIndex; locationIndex++ {
+	for locationIndex := range numContainerLocationIndex {
 		location := containerLocationFromIndex(locationIndex)
 		rpath := r.jsonPath[locationIndex]
 
@@ -532,7 +531,7 @@ func (r *containerStore) save(saveLocations containerLocations) error {
 		return err
 	}
 	r.lastWrite = lw
-	for locationIndex := 0; locationIndex < numContainerLocationIndex; locationIndex++ {
+	for locationIndex := range numContainerLocationIndex {
 		location := containerLocationFromIndex(locationIndex)
 		if location&saveLocations == 0 {
 			continue
@@ -642,13 +641,13 @@ func (r *containerStore) ClearFlag(id string, flag string) error {
 }
 
 // Requires startWriting.
-func (r *containerStore) SetFlag(id string, flag string, value interface{}) error {
+func (r *containerStore) SetFlag(id string, flag string, value any) error {
 	container, ok := r.lookup(id)
 	if !ok {
 		return ErrContainerUnknown
 	}
 	if container.Flags == nil {
-		container.Flags = make(map[string]interface{})
+		container.Flags = make(map[string]any)
 	}
 	container.Flags[flag] = value
 	return r.saveFor(container)
@@ -692,9 +691,9 @@ func (r *containerStore) create(id string, names []string, image, layer string, 
 		BigDataSizes:   make(map[string]int64),
 		BigDataDigests: make(map[string]digest.Digest),
 		Created:        time.Now().UTC(),
-		Flags:          copyStringInterfaceMap(options.Flags),
-		UIDMap:         copyIDMap(options.UIDMap),
-		GIDMap:         copyIDMap(options.GIDMap),
+		Flags:          newMapFrom(options.Flags),
+		UIDMap:         copySlicePreferringNil(options.UIDMap),
+		GIDMap:         copySlicePreferringNil(options.GIDMap),
 		volatileStore:  options.Volatile,
 	}
 	if options.MountOpts != nil {
@@ -906,7 +905,7 @@ func (r *containerStore) BigDataNames(id string) ([]string, error) {
 	if !ok {
 		return nil, ErrContainerUnknown
 	}
-	return copyStringSlice(c.BigDataNames), nil
+	return copySlicePreferringNil(c.BigDataNames), nil
 }
 
 // Requires startWriting.

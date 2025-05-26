@@ -35,14 +35,11 @@ func PodCreate(w http.ResponseWriter, r *http.Request) {
 		err     error
 	)
 	psg := specgen.PodSpecGenerator{InfraContainerSpec: &specgen.SpecGenerator{}}
-	if err := json.NewDecoder(r.Body).Decode(&psg); err != nil {
+	if err = json.NewDecoder(r.Body).Decode(&psg); err != nil {
 		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("%v: %w", failedToDecodeSpecgen, err))
 		return
 	}
-	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("%v: %w", failedToDecodeSpecgen, err))
-		return
-	}
+
 	if !psg.NoInfra {
 		infraOptions := entities.NewInfraContainerCreateOptions() // options for pulling the image and FillOutSpec
 		infraOptions.Net = &entities.NetOptions{}
@@ -73,7 +70,6 @@ func PodCreate(w http.ResponseWriter, r *http.Request) {
 		// a few extra that do not have the same json tags
 		psg.InfraContainerSpec.Name = psg.InfraName
 		psg.InfraContainerSpec.ConmonPidFile = psg.InfraConmonPidFile
-		psg.InfraContainerSpec.ContainerCreateCommand = psg.InfraCommand
 		psg.InfraContainerSpec.Image = psg.InfraImage
 		psg.InfraContainerSpec.RawImageName = psg.InfraImage
 	}
@@ -171,7 +167,7 @@ func PodStop(w http.ResponseWriter, r *http.Request) {
 		responses, stopError = pod.Stop(r.Context(), false)
 	}
 	if stopError != nil && !errors.Is(stopError, define.ErrPodPartialFail) {
-		utils.Error(w, http.StatusInternalServerError, err)
+		utils.Error(w, http.StatusInternalServerError, stopError)
 		return
 	}
 	// Try to clean up the pod - but only warn on failure, it's nonfatal.

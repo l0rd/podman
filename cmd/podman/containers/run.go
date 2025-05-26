@@ -206,6 +206,10 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	s.RawImageName = rawImageName
+
+	// Include the command used to create the container.
+	s.ContainerCreateCommand = os.Args
+
 	s.ImageOS = cliVals.OS
 	s.ImageArch = cliVals.Arch
 	s.ImageVariant = cliVals.Variant
@@ -221,7 +225,14 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	report, err := registry.ContainerEngine().ContainerRun(registry.GetContext(), runOpts)
+	if s.HealthConfig == nil {
+		s.HealthConfig, err = common.GetHealthCheckOverrideConfig(cmd, &cliVals)
+		if err != nil {
+			return err
+		}
+	}
+
+	report, err := registry.ContainerEngine().ContainerRun(registry.Context(), runOpts)
 	// report.ExitCode is set by ContainerRun even it returns an error
 	if report != nil {
 		registry.SetExitCode(report.ExitCode)
@@ -244,7 +255,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	if runRmi {
-		_, rmErrors := registry.ImageEngine().Remove(registry.GetContext(), []string{imageName}, entities.ImageRemoveOptions{Ignore: true})
+		_, rmErrors := registry.ImageEngine().Remove(registry.Context(), []string{imageName}, entities.ImageRemoveOptions{Ignore: true})
 		for _, err := range rmErrors {
 			logrus.Warnf("Failed to remove image: %v", err)
 		}

@@ -27,11 +27,6 @@ type ociError struct {
 	Msg   string `json:"msg,omitempty"`
 }
 
-// Create systemd unit name for cgroup scopes
-func createUnitName(prefix string, name string) string {
-	return fmt.Sprintf("%s-%s.scope", prefix, name)
-}
-
 // Bind ports to keep them closed on the host
 func bindPorts(ports []types.PortMapping) ([]*os.File, error) {
 	var files []*os.File
@@ -152,7 +147,7 @@ func getOCIRuntimeError(name, runtimeMsg string) error {
 		}
 		return fmt.Errorf("%s: %s: %w", name, strings.Trim(errStr, "\n"), define.ErrOCIRuntimePermissionDenied)
 	}
-	if match := regexp.MustCompile("(?i).*executable file not found in.*|.*no such file or directory.*").FindString(runtimeMsg); match != "" {
+	if match := regexp.MustCompile("(?i).*executable file not found in.*|.*no such file or directory.*|.*open executable.*").FindString(runtimeMsg); match != "" {
 		errStr := match
 		if includeFullOutput {
 			errStr = runtimeMsg

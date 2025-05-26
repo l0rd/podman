@@ -21,7 +21,7 @@ import (
 	"github.com/containers/podman/v5/pkg/specgen"
 	"github.com/containers/podman/v5/pkg/specgenutil"
 	"github.com/containers/podman/v5/pkg/util"
-	"github.com/docker/docker/pkg/parsers"
+	"github.com/containers/storage/pkg/parsers"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -233,17 +233,17 @@ func create(cmd *cobra.Command, args []string) error {
 		}
 	}
 	sort.Ints(vals)
+loop:
 	for ind, core := range vals {
 		switch {
 		case core > int(cpuSet):
 			if copy == "" {
 				copy = "0-" + strconv.Itoa(int(cpuSet))
 				infraOptions.CPUSetCPUs = copy
-				break
 			} else {
 				infraOptions.CPUSetCPUs = copy
-				break
 			}
+			break loop
 		case ind != 0:
 			copy += "," + strconv.Itoa(core)
 		default:
@@ -252,6 +252,7 @@ func create(cmd *cobra.Command, args []string) error {
 	}
 	createOptions.Cpus = infraOptions.CPUS
 	createOptions.CpusetCpus = infraOptions.CPUSetCPUs
+
 	podSpec := specgen.NewPodSpecGenerator()
 	podSpec, err = entities.ToPodSpecGen(*podSpec, &createOptions)
 	if err != nil {
@@ -265,6 +266,7 @@ func create(cmd *cobra.Command, args []string) error {
 		}
 		podSpec.InfraContainerSpec = specgen.NewSpecGenerator(imageName, false)
 		podSpec.InfraContainerSpec.RawImageName = rawImageName
+		podSpec.InfraContainerSpec.BaseHostsFile = podSpec.PodNetworkConfig.HostsFile
 		podSpec.InfraContainerSpec.NetworkOptions = podSpec.NetworkOptions
 		podSpec.InfraContainerSpec.RestartPolicy = podSpec.RestartPolicy
 		err = specgenutil.FillOutSpecGen(podSpec.InfraContainerSpec, &infraOptions, []string{})

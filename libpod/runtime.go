@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -32,6 +33,8 @@ import (
 	"github.com/containers/podman/v5/libpod/plugin"
 	"github.com/containers/podman/v5/libpod/shutdown"
 	"github.com/containers/podman/v5/pkg/domain/entities"
+	"github.com/containers/podman/v5/pkg/domain/entities/reports"
+	artStore "github.com/containers/podman/v5/pkg/libartifact/store"
 	"github.com/containers/podman/v5/pkg/rootless"
 	"github.com/containers/podman/v5/pkg/systemd"
 	"github.com/containers/podman/v5/pkg/util"
@@ -44,7 +47,6 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/exp/slices"
 )
 
 // Set up the JSON library for all of Libpod
@@ -81,6 +83,9 @@ type Runtime struct {
 	libimageRuntime        *libimage.Runtime
 	libimageEventsShutdown chan bool
 	lockManager            lock.Manager
+
+	// ArtifactStore returns the artifact store created from the runtime.
+	ArtifactStore func() (*artStore.ArtifactStore, error)
 
 	// Worker
 	workerChannel chan func()
@@ -532,6 +537,11 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		}
 		runtime.config.Network.NetworkBackend = string(netBackend)
 		runtime.network = netInterface
+
+		// Using sync once value to only init the store exactly once and only when it will be actually be used.
+		runtime.ArtifactStore = sync.OnceValues(func() (*artStore.ArtifactStore, error) {
+			return artStore.NewArtifactStore(filepath.Join(runtime.storageConfig.GraphRoot, "artifacts"), runtime.SystemContext())
+		})
 	}
 
 	// We now need to see if the system has restarted
@@ -1262,6 +1272,43 @@ func (r *Runtime) LockConflicts() (map[uint32][]string, []uint32, error) {
 	}
 
 	return toReturn, locksHeld, nil
+}
+
+// PruneBuildContainers removes any build containers that were created during the build,
+// but were not removed because the build was unexpectedly terminated.
+//
+// Note: This is not safe operation and should be executed only when no builds are in progress. It can interfere with builds in progress.
+func (r *Runtime) PruneBuildContainers() ([]*reports.PruneReport, error) {
+	stageContainersPruneReports := []*reports.PruneReport{}
+
+	containers, err := r.store.Containers()
+	if err != nil {
+		return stageContainersPruneReports, err
+	}
+	for _, container := range containers {
+		path, err := r.store.ContainerDirectory(container.ID)
+		if err != nil {
+			return stageContainersPruneReports, err
+		}
+		if err := fileutils.Exists(filepath.Join(path, "buildah.json")); err != nil {
+			continue
+		}
+
+		report := &reports.PruneReport{
+			Id: container.ID,
+		}
+		size, err := r.store.ContainerSize(container.ID)
+		if err != nil {
+			report.Err = err
+		}
+		report.Size = uint64(size)
+
+		if err := r.store.DeleteContainer(container.ID); err != nil {
+			report.Err = errors.Join(report.Err, err)
+		}
+		stageContainersPruneReports = append(stageContainersPruneReports, report)
+	}
+	return stageContainersPruneReports, nil
 }
 
 // SystemCheck checks our storage for consistency, and depending on the options

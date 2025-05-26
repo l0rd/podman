@@ -182,6 +182,19 @@ host.slirp4netns.executable | $expr_path
     is "$output" ".*graphOptions: {}" "output includes graphOptions: {}"
 }
 
+@test "podman info - additional image stores" {
+    skip_if_remote "--storage-opt flag is not supported for remote"
+    driver=$(podman_storage_driver)
+    store1=$PODMAN_TMPDIR/store1
+    store2=$PODMAN_TMPDIR/store2
+    mkdir -p $store1 $store2
+    run_podman info --storage-opt=$driver'.imagestore='$store1 \
+                    --storage-opt=$driver'.imagestore='$store2 \
+                    --format '{{index .Store.GraphOptions "'$driver'.additionalImageStores"}}\n{{index .Store.GraphOptions "'$driver'.imagestore"}}'
+    assert "${lines[0]}" == "["$store1" "$store2"]" "output includes additional image stores"
+    assert "${lines[1]}" == "$store2" "old imagestore output"
+}
+
 @test "podman info netavark " {
     # Confirm netavark in use when explicitly required by execution environment.
     if [[ "$NETWORK_BACKEND" == "netavark" ]]; then
@@ -290,6 +303,29 @@ EOF
            "with CI_DESIRED_DATABASE"
 
     run_podman $safe_opts system reset --force
+}
+
+@test "podman - empty string defaults for certain values" {
+    skip_if_remote "Test uses nonstandard paths for c/storage directories"
+
+    # We just want this to be empty - so graph driver will be set to the empty string
+    touch $PODMAN_TMPDIR/storage.conf
+
+    safe_opts=$(podman_isolation_opts ${PODMAN_TMPDIR})
+
+    # Force all custom directories so we don't pick up an existing database
+    CONTAINERS_STORAGE_CONF=$PODMAN_TMPDIR/storage.conf run_podman 0+w $safe_opts info
+    require_warning "The storage 'driver' option should be set" \
+       	            "c/storage should warn on empty storage driver"
+
+    # Now add a valid graph driver to storage.conf
+    cat >$PODMAN_TMPDIR/storage.conf <<EOF
+[storage]
+driver="$(podman_storage_driver)"
+EOF
+
+    # Second run of Podman should still succeed after editing the graph driver.
+    CONTAINERS_STORAGE_CONF=$PODMAN_TMPDIR/storage.conf run_podman $safe_opts info
 }
 
 # vim: filetype=sh

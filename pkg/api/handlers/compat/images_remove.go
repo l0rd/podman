@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/containers/podman/v5/libpod"
+	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/api/handlers/utils"
 	api "github.com/containers/podman/v5/pkg/api/types"
 	"github.com/containers/podman/v5/pkg/domain/entities"
@@ -22,6 +23,7 @@ func RemoveImage(w http.ResponseWriter, r *http.Request) {
 	query := struct {
 		Force   bool `schema:"force"`
 		NoPrune bool `schema:"noprune"`
+		Ignore  bool `schema:"ignore"`
 	}{
 		// This is where you can override the golang default value for one of fields
 	}
@@ -40,8 +42,10 @@ func RemoveImage(w http.ResponseWriter, r *http.Request) {
 	imageEngine := abi.ImageEngine{Libpod: runtime}
 
 	options := entities.ImageRemoveOptions{
-		Force:   query.Force,
-		NoPrune: query.NoPrune,
+		Force:                        query.Force,
+		NoPrune:                      query.NoPrune,
+		Ignore:                       query.Ignore,
+		DisableForceRemoveContainers: true,
 	}
 	report, rmerrors := imageEngine.Remove(r.Context(), []string{possiblyNormalizedName}, options)
 	if len(rmerrors) > 0 && rmerrors[0] != nil {
@@ -52,6 +56,10 @@ func RemoveImage(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, storage.ErrImageUsedByContainer) {
 			utils.Error(w, http.StatusConflict, fmt.Errorf("image %s is in use: %w", name, err))
+			return
+		}
+		if errors.Is(err, define.ErrCtrStateInvalid) {
+			utils.Error(w, http.StatusConflict, fmt.Errorf("image %s is in an invalid state: %w", name, err))
 			return
 		}
 		utils.Error(w, http.StatusInternalServerError, err)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,12 +29,12 @@ import (
 	"github.com/containers/podman/v5/pkg/channel"
 	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/domain/infra/abi"
+	domainUtils "github.com/containers/podman/v5/pkg/domain/utils"
 	"github.com/containers/podman/v5/pkg/errorhandling"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/schema"
 	"github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/exp/maps"
 )
 
 func ManifestCreate(w http.ResponseWriter, r *http.Request) {
@@ -520,24 +521,17 @@ func ManifestModify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	annotationsFromAnnotationSlice := func(annotation []string) map[string]string {
-		annotations := make(map[string]string)
-		for _, annotationSpec := range annotation {
-			key, val, hasVal := strings.Cut(annotationSpec, "=")
-			if !hasVal {
-				utils.Error(w, http.StatusBadRequest, fmt.Errorf("no value given for annotation %q", key))
-				return nil
-			}
-			annotations[key] = val
-		}
-		return annotations
-	}
 	if len(body.ManifestAddOptions.Annotation) != 0 {
 		if len(body.ManifestAddOptions.Annotations) != 0 {
 			utils.Error(w, http.StatusBadRequest, fmt.Errorf("can not set both Annotation and Annotations"))
 			return
 		}
-		body.ManifestAddOptions.Annotations = annotationsFromAnnotationSlice(body.ManifestAddOptions.Annotation)
+		annots, err := domainUtils.ParseAnnotations(body.ManifestAddOptions.Annotation)
+		if err != nil {
+			utils.Error(w, http.StatusBadRequest, err)
+			return
+		}
+		body.ManifestAddOptions.Annotations = annots
 		body.ManifestAddOptions.Annotation = nil
 	}
 	if len(body.ManifestAddOptions.IndexAnnotation) != 0 {
@@ -545,7 +539,12 @@ func ManifestModify(w http.ResponseWriter, r *http.Request) {
 			utils.Error(w, http.StatusBadRequest, fmt.Errorf("can not set both IndexAnnotation and IndexAnnotations"))
 			return
 		}
-		body.ManifestAddOptions.IndexAnnotations = annotationsFromAnnotationSlice(body.ManifestAddOptions.IndexAnnotation)
+		annots, err := domainUtils.ParseAnnotations(body.ManifestAddOptions.IndexAnnotation)
+		if err != nil {
+			utils.Error(w, http.StatusBadRequest, err)
+			return
+		}
+		body.ManifestAddOptions.IndexAnnotations = annots
 		body.ManifestAddOptions.IndexAnnotation = nil
 	}
 
@@ -706,14 +705,20 @@ func ManifestModify(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.EqualFold("annotate", body.Operation):
 		options := body.ManifestAnnotateOptions
-		for _, image := range body.Images {
+		images := []string{""}
+		if len(body.Images) > 0 {
+			images = body.Images
+		}
+		for _, image := range images {
 			id, err := imageEngine.ManifestAnnotate(r.Context(), name, image, options)
 			if err != nil {
 				report.Errors = append(report.Errors, err)
 				continue
 			}
 			report.ID = id
-			report.Images = append(report.Images, image)
+			if image != "" {
+				report.Images = append(report.Images, image)
+			}
 		}
 	default:
 		utils.Error(w, http.StatusBadRequest, fmt.Errorf("illegal operation %q for %q", body.Operation, r.URL.String()))
@@ -739,20 +744,43 @@ func ManifestModify(w http.ResponseWriter, r *http.Request) {
 
 // ManifestDelete removes a manifest list from storage
 func ManifestDelete(w http.ResponseWriter, r *http.Request) {
+	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 	imageEngine := abi.ImageEngine{Libpod: runtime}
 
-	name := utils.GetName(r)
-	if _, err := runtime.LibimageRuntime().LookupManifestList(name); err != nil {
-		utils.Error(w, http.StatusNotFound, err)
-		return
+	query := struct {
+		Ignore bool `schema:"ignore"`
+	}{
+		// Add defaults here once needed.
 	}
 
-	results, errs := imageEngine.ManifestRm(r.Context(), []string{name})
-	errsString := errorhandling.ErrorsToStrings(errs)
-	report := handlers.LibpodImagesRemoveReport{
-		ImageRemoveReport: *results,
-		Errors:            errsString,
+	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
+		utils.Error(w, http.StatusBadRequest,
+			fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
+		return
 	}
-	utils.WriteResponse(w, http.StatusOK, report)
+	opts := entities.ImageRemoveOptions{
+		Ignore: query.Ignore,
+	}
+
+	name := utils.GetName(r)
+	rmReport, rmErrors := imageEngine.ManifestRm(r.Context(), []string{name}, opts)
+	// In contrast to batch-removal, where we're only setting the exit
+	// code, we need to have another closer look at the errors here and set
+	// the appropriate http status code.
+
+	switch rmReport.ExitCode {
+	case 0:
+		report := handlers.LibpodImagesRemoveReport{ImageRemoveReport: *rmReport, Errors: []string{}}
+		utils.WriteResponse(w, http.StatusOK, report)
+	case 1:
+		// 404 - no such image
+		utils.Error(w, http.StatusNotFound, errorhandling.JoinErrors(rmErrors))
+	case 2:
+		// 409 - conflict error (in use by containers)
+		utils.Error(w, http.StatusConflict, errorhandling.JoinErrors(rmErrors))
+	default:
+		// 500 - internal error
+		utils.Error(w, http.StatusInternalServerError, errorhandling.JoinErrors(rmErrors))
+	}
 }

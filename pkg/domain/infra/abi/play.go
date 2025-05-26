@@ -67,12 +67,6 @@ func (ic *ContainerEngine) createServiceContainer(ctx context.Context, name stri
 		}
 	}
 
-	// Similar to infra containers, a service container is using the pause image.
-	image, err := generate.PullOrBuildInfraImage(ic.Libpod, "")
-	if err != nil {
-		return nil, fmt.Errorf("image for service container: %w", err)
-	}
-
 	rtc, err := ic.Libpod.GetConfigNoCopy()
 	if err != nil {
 		return nil, err
@@ -92,7 +86,7 @@ func (ic *ContainerEngine) createServiceContainer(ctx context.Context, name stri
 	}
 
 	// Create and fill out the runtime spec.
-	s := specgen.NewSpecGenerator(image, false)
+	s := specgen.NewSpecGenerator("", true)
 	if err := specgenutil.FillOutSpecGen(s, &ctrOpts, []string{}); err != nil {
 		return nil, fmt.Errorf("completing spec for service container: %w", err)
 	}
@@ -283,6 +277,27 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 	var configMaps []v1.ConfigMap
 
 	ranContainers := false
+	// set the ranContainers bool to true if at least one container was successfully started.
+	setRanContainers := func(r *entities.PlayKubeReport) {
+		if !ranContainers {
+			for _, p := range r.Pods {
+				numCons := len(p.Containers) + len(p.InitContainers)
+				if numCons == 0 {
+					// special case, the pod has no containers (besides infra)
+					// That seems to be valid per https://github.com/containers/podman/issues/25786
+					// and users could depend on it so mark it as running in that case.
+					ranContainers = true
+					break
+				}
+				// If the list of container errors is less then the total number of pod containers then we know it did start.
+				if len(p.ContainerErrors) < numCons {
+					ranContainers = true
+					break
+				}
+			}
+		}
+	}
+
 	// FIXME: both, the service container and the proxies, should ideally
 	// be _state_ of an object. The Kube code below is quite Spaghetti-code
 	// which we should refactor at some point to make it easier to extend
@@ -364,7 +379,7 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 
 			report.Pods = append(report.Pods, r.Pods...)
 			validKinds++
-			ranContainers = true
+			setRanContainers(r)
 		case "DaemonSet":
 			var daemonSetYAML v1apps.DaemonSet
 
@@ -380,7 +395,7 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 
 			report.Pods = append(report.Pods, r.Pods...)
 			validKinds++
-			ranContainers = true
+			setRanContainers(r)
 		case "Deployment":
 			var deploymentYAML v1apps.Deployment
 
@@ -396,7 +411,7 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 
 			report.Pods = append(report.Pods, r.Pods...)
 			validKinds++
-			ranContainers = true
+			setRanContainers(r)
 		case "Job":
 			var jobYAML v1.Job
 
@@ -412,7 +427,7 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 
 			report.Pods = append(report.Pods, r.Pods...)
 			validKinds++
-			ranContainers = true
+			setRanContainers(r)
 		case "PersistentVolumeClaim":
 			var pvcYAML v1.PersistentVolumeClaim
 
@@ -473,10 +488,14 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 		return nil, fmt.Errorf("YAML document does not contain any supported kube kind")
 	}
 
+	if !options.ServiceContainer {
+		return report, nil
+	}
+
 	// If we started containers along with a service container, we are
 	// running inside a systemd unit and need to set the main PID.
 
-	if options.ServiceContainer && ranContainers {
+	if ranContainers {
 		switch len(notifyProxies) {
 		case 0: // Optimization for containers/podman/issues/17345
 			// No container needs sdnotify, so we can mark the
@@ -509,6 +528,12 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 		}
 
 		report.ServiceContainerID = serviceContainer.ID()
+	} else if serviceContainer != nil {
+		// No containers started, make sure to stop the service container.
+		// Note because the pods still do exists and are not removed by default we cannot remove it.
+		if err := serviceContainer.StopWithTimeout(0); err != nil {
+			logrus.Errorf("Failed to stop service container: %v", err)
+		}
 	}
 
 	return report, nil
@@ -625,7 +650,7 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 
 	podOpt := entities.PodCreateOptions{
 		Infra:      true,
-		Net:        &entities.NetOptions{NoHosts: options.NoHosts},
+		Net:        &entities.NetOptions{NoHosts: options.NoHosts, NoHostname: options.NoHostname},
 		ExitPolicy: string(config.PodExitPolicyStop),
 	}
 	podOpt, err = kube.ToPodOpt(ctx, podName, podOpt, options.PublishAllPorts, podYAML)
@@ -715,9 +740,6 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 	}
 
 	p := specgen.NewPodSpecGenerator()
-	if err != nil {
-		return nil, nil, err
-	}
 
 	p, err = entities.ToPodSpecGen(*p, &podOpt)
 	if err != nil {
@@ -1143,7 +1165,6 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 		}
 		for id, err := range podStartErrors {
 			playKubePod.ContainerErrors = append(playKubePod.ContainerErrors, fmt.Errorf("starting container %s: %w", id, err).Error())
-			fmt.Println(playKubePod.ContainerErrors)
 		}
 
 		// Wait for each proxy to receive a READY message. Use a wait
@@ -1286,6 +1307,10 @@ func (ic *ContainerEngine) buildOrPullImage(ctx context.Context, cwd string, wri
 func (ic *ContainerEngine) getImageAndLabelInfo(ctx context.Context, cwd string, annotations map[string]string, writer io.Writer, container v1.Container, options entities.PlayKubeOptions) (*libimage.Image, map[string]string, error) {
 	// Contains all labels obtained from kube
 	labels := make(map[string]string)
+
+	if len(container.Image) == 0 {
+		return nil, labels, nil
+	}
 
 	pulledImage, err := ic.buildOrPullImage(ctx, cwd, writer, container.Image, container.ImagePullPolicy, options)
 	if err != nil {
@@ -1633,7 +1658,7 @@ func getBuildFile(imageName string, cwd string) (string, error) {
 	// If the error is not because the file does not exist, take
 	// a mulligan and try Dockerfile.  If that also fails, return that
 	// error
-	if err != nil && !os.IsNotExist(err) {
+	if !errors.Is(err, os.ErrNotExist) {
 		logrus.Error(err.Error())
 	}
 
@@ -1643,7 +1668,7 @@ func getBuildFile(imageName string, cwd string) (string, error) {
 		return dockerfilePath, nil
 	}
 	// Strike two
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	return "", err

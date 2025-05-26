@@ -1,5 +1,5 @@
 ####> This option file is used in:
-####>   podman create, run
+####>   podman create, run, update
 ####> If file is edited, make sure the changes
 ####> are applicable to all of those.
 #### **--health-start-period**=*period*
@@ -12,3 +12,5 @@ the container's health state will be updated to `healthy`. However, if the healt
 stay as `starting` until either the health check is successful or until the `--health-start-period` time is over. If the
 health check command fails after the `--health-start-period` time is over, the health state will be updated to `unhealthy`.
 The health check command is executed periodically based on the value of `--health-interval`.
+
+Note: This parameter will overwrite related healthcheck configuration from the image.

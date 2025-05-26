@@ -3,10 +3,10 @@ package e2e_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,12 +45,12 @@ type machineSession struct {
 
 type machineTestBuilder struct {
 	cmd          []string
+	stdin        io.Reader
 	imagePath    string
 	name         string
 	names        []string
 	podmanBinary string
 	timeout      time.Duration
-	isInit       bool
 }
 
 // waitWithTimeout waits for a command to complete for a given
@@ -141,10 +141,13 @@ func (m *machineTestBuilder) setCmd(mc machineCommand) *machineTestBuilder {
 		m.names = append(m.names, m.name)
 	}
 	m.cmd = mc.buildCmd(m)
+	m.stdin = nil
+	return m
+}
 
-	_, ok := mc.(*initMachine)
-	m.isInit = ok
-
+// setStdin sets the stdin for the next command to be run
+func (m *machineTestBuilder) setStdin(data io.Reader) *machineTestBuilder {
+	m.stdin = data
 	return m
 }
 
@@ -158,7 +161,7 @@ func (m *machineTestBuilder) setTimeout(timeout time.Duration) *machineTestBuild
 func (m *machineTestBuilder) toQemuInspectInfo() ([]machine.InspectInfo, int, error) {
 	args := []string{"machine", "inspect"}
 	args = append(args, m.names...)
-	session, err := runWrapper(m.podmanBinary, args, defaultTimeout, true)
+	session, err := runWrapper(m.podmanBinary, args, nil, defaultTimeout, true)
 	if err != nil {
 		return nil, -1, err
 	}
@@ -168,41 +171,24 @@ func (m *machineTestBuilder) toQemuInspectInfo() ([]machine.InspectInfo, int, er
 }
 
 func (m *machineTestBuilder) runWithoutWait() (*machineSession, error) {
-	return runWrapper(m.podmanBinary, m.cmd, m.timeout, false)
+	return runWrapper(m.podmanBinary, m.cmd, m.stdin, m.timeout, false)
 }
 
 func (m *machineTestBuilder) run() (*machineSession, error) {
-	s, err := runWrapper(m.podmanBinary, m.cmd, m.timeout, true)
-	// debug for the slow init on macos
-	// The image file is not consistent, sometimes it is sparse sometimes not.
-	if m.isInit && runtime.GOOS == "darwin" {
-		c := exec.Command("du", "-ah", filepath.Join(os.Getenv("HOME"), ".local/share/containers/podman/machine/applehv"))
-		c.Stderr = os.Stderr
-		c.Stdout = os.Stdout
-		GinkgoWriter.Println(c.Args)
-		_ = c.Run()
-
-		c = exec.Command("ls", "-lh", filepath.Join(os.Getenv("HOME"), ".local/share/containers/podman/machine/applehv"))
-		c.Stderr = os.Stderr
-		c.Stdout = os.Stdout
-		GinkgoWriter.Println(c.Args)
-		_ = c.Run()
-
-		c = exec.Command("stat", filepath.Join(os.Getenv("HOME"), ".local/share/containers/podman/machine/applehv", m.name+"-arm64.raw"))
-		c.Stderr = os.Stderr
-		c.Stdout = os.Stdout
-		GinkgoWriter.Println(c.Args)
-		_ = c.Run()
-	}
+	s, err := runWrapper(m.podmanBinary, m.cmd, m.stdin, m.timeout, true)
 	return s, err
 }
 
-func runWrapper(podmanBinary string, cmdArgs []string, timeout time.Duration, wait bool) (*machineSession, error) {
+func runWrapper(podmanBinary string, cmdArgs []string, stdinData io.Reader, timeout time.Duration, wait bool) (*machineSession, error) {
 	if len(os.Getenv("DEBUG")) > 0 {
 		cmdArgs = append([]string{"--log-level=debug"}, cmdArgs...)
 	}
 	GinkgoWriter.Println(podmanBinary + " " + strings.Join(cmdArgs, " "))
 	c := exec.Command(podmanBinary, cmdArgs...)
+	if stdinData != nil {
+		c.Stdin = stdinData
+	}
+
 	session, err := Start(c, GinkgoWriter, GinkgoWriter)
 	if err != nil {
 		Fail(fmt.Sprintf("Unable to start session: %q", err))
@@ -272,22 +258,4 @@ func isVmtype(vmType define.VMType) bool {
 // isWSL is a simple wrapper to determine if the testprovider is WSL
 func isWSL() bool {
 	return isVmtype(define.WSLVirt)
-}
-
-// Only used on Windows
-//
-//nolint:unparam,unused
-func runSystemCommand(binary string, cmdArgs []string, timeout time.Duration, wait bool) (*machineSession, error) {
-	GinkgoWriter.Println(binary + " " + strings.Join(cmdArgs, " "))
-	c := exec.Command(binary, cmdArgs...)
-	session, err := Start(c, GinkgoWriter, GinkgoWriter)
-	if err != nil {
-		Fail(fmt.Sprintf("Unable to start session: %q", err))
-		return nil, err
-	}
-	ms := machineSession{session}
-	if wait {
-		ms.waitWithTimeout(timeout)
-	}
-	return &ms, nil
 }

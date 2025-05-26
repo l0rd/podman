@@ -1,5 +1,407 @@
 # Release Notes
 
+## 5.5.0
+### Features
+- A new command has been added, `podman machine cp`, to copy files into a running `podman machine` VM.
+- A new command has been added, `podman artifact extract`, to copy some or all of the contents of an OCI artifact to a location on disk.
+- The `--mount` option to `podman create`, `podman run`, and `podman pod create` now supports a new mount type, `--mount type=artifact`, to mount OCI artifacts into containers.
+- The `podman artifact add` command now features two new options, `--append` (to add new files to an existing artifact) and `--file-type` (to specify the MIME type of the file added to the artifact) ([#25884](https://github.com/containers/podman/issues/25884)).
+- The `podman artifact rm` command now features a new option, `--all`, to remove all artifacts in the local store.
+- The `--filter` option to `podman pause`, `podman ps`, `podman restart`, `podman rm`, `podman start`, `podman stop`, and `podman unpause` now accepts a new filter, `command`, which filters on the first element (`argv[0]`) of the command run in the container.
+- The `podman exec` command now supports a new option, `--cidfile`, to specify the ID of the container to exec into via a file ([#21256](https://github.com/containers/podman/issues/21256)).
+- The `podman kube generate` and `podman kube play` commands now supports a new annotation, `io.podman.annotation.pids-limit/$containername`, preserving the PID limit for containers across `kube generate` and `kube play` ([#24418](https://github.com/containers/podman/issues/24418)).
+- Quadlet `.container` units now support three new keys, `Memory=` (set maximum memory for the created container), `ReloadCmd` (execute a command via systemd `ExecReload`), and `ReloadSignal` (kill the container with the given signal via systemd `ExecReload`) ([#22036](https://github.com/containers/podman/issues/22036)).
+- Quadlet `.container`, `.image`, and `.build` units now support two new keys, `Retry` (number of times to retry pulling image on failure) and `RetryDelay` (delay between retries) ([#25109](https://github.com/containers/podman/issues/25109)).
+- Quadlet `.pod` units now support a new key, `HostName=`, to set the pod's hostname ([#25639](https://github.com/containers/podman/issues/25639)).
+- Quadlet files now support a new option, `UpheldBy`, in the `Install` section, corresponding to the systemd `Upholds` option.
+- The names of Quadlet units specified as systemd dependencies are now automatically translated - e.g. `Wants=my.container` is now valid.
+- Podman now generates events for the creation and removal of secrets ([#24030](https://github.com/containers/podman/issues/24030)).
+- A new global option has been added to Podman, `--cdi-spec-dir`, to specify additional search paths for CDI specs to the CDI loader ([#18292](https://github.com/containers/podman/issues/18292) and [#25691](https://github.com/containers/podman/issues/25691)).
+- The `podman build` command now supports a new option, `--inherit-labels` (defaults to true), which controls whether labels are inherited from the base image or base stages.
+- The `podman update` command now supports two new options, `--env` and `--unsetenv`, to alter the environment variables of existing containers ([#24875](https://github.com/containers/podman/issues/24875)).
+
+### Breaking Changes
+- Due to changes in Docker API types, two small breaking changes have been made in the Go bindings for the REST API. The `containers.Commit()` function now returns a new struct (`types.IDResponse`) with identical contents, and the `containers.ExecCreate` function's `handlers.ExecCreateConfig` parameter now contains a different embedded struct, potentially requiring changes to how it is assigned to.
+
+### Changes
+- Podman now requires at least Go 1.23 to build.
+- Healthchecks have been refactored to avoid writing to the database as much as possible, greatly improving performance on systems with many simultaneous healthchecks running.
+- Healthchecks now have a new status, `stopped`, which is reported if the container the healthcheck was run on stopped before the check could be completed ([#25276](https://github.com/containers/podman/issues/25276)).
+- Containers in pods are now stopped in order based on their dependencies, with the infra container being stopped last, preventing application containers from losing networking before they are stopped due to the infra container stopping prematurely.
+- Due to challenges with handling automatic installation, the Windows installer no longer installs WSLv2 or Hyper-V.
+- Quadlet will now print warnings when skipping lines to help identify malformed Quadlet files ([#25339](https://github.com/containers/podman/issues/25339)).
+- Creating `podman machine` VMs with a host mount over the VM's `/tmp` directory is no longer allowed ([#18230](https://github.com/containers/podman/issues/18230)).
+- The `podman logs` command now allows options to be specified after the container name (e.g. `podman logs $containername --follow`) ([#25653](https://github.com/containers/podman/issues/25653)).
+- Podman, by default, no longer uses a pause image for pod infra and service containers. Instead, a root filesystem containing only the `catatonit` binary will be used ([#23292](https://github.com/containers/podman/issues/23292)).
+- The `podman system reset` command no longer removes the user's `podman.sock` API socket.
+- When using Netavark v1.15 and higher, containers in non-default networks will no longer have the default search domain `dns.podman` added. Queries resolving such names will still work.
+- Stopping a Quadlet `.network` unit will now delete the network (if no containers are actively using it) ([#23678](https://github.com/containers/podman/issues/23678)).
+- For security hardening, the `/proc/interrupts` and `/sys/devices/system/cpu/$CPU/thermal_throttle` paths are now masked by default in containers ([#25634](https://github.com/containers/podman/issues/25634)).
+
+### Bugfixes
+- Fixed a bug where healthchecks would still run while a container was paused ([#24590](https://github.com/containers/podman/issues/24590)).
+- Fixed a bug where the remote Podman client on Windows could not mount named volumes with a single-character name into containers ([#25218](https://github.com/containers/podman/issues/25218)).
+- Fixed a bug where mounting an image could panic when run without `CAP_SYS_ADMIN` ([#25241](https://github.com/containers/podman/issues/25241)).
+- Fixed a bug where Podman would not report errors when setting up healthchecks ([#25034](https://github.com/containers/podman/issues/25034)).
+- Fixed a bug where the `podman exec` command would not add the additional groups of the user the exec session was run as unless the user was explicitly added with the `--user` option ([#25610](https://github.com/containers/podman/issues/25610)).
+- Fixed a bug where errors during the `podman network connect` and `podman network disconnect` commands could create errors in the database which would cause `podman inspect` on the container to fail.
+- Fixed a bug where the `podman kube generate` command did not correctly generate YAML for volume mounts using a subpath.
+- Fixed a bug where the `podman system df` command could show a negative reclaimable size.
+- Fixed a bug where accessing a rootful `podman machine` VM that was not `podman-machine-default` (the default VM) with the `podman machine ssh` command would put the user into the rootless shell ([#25332](https://github.com/containers/podman/issues/25332)).
+- Fixed a bug where the `podman machine init` would report nonsensical memory values in error messages when trying to create a machine with more memory than the system.
+- Fixed a bug where the remote Podman client's `podman start --attach` command would incorrectly print an error when run on a container created with the `--rm` option ([#25965](https://github.com/containers/podman/issues/25965)).
+- Fixed a bug where the remote Podman client's `podman pull` command could hang and leak memory if the server was unexpectedly stopped or encountered an error during a pull.
+- Fixed a bug where the remote Podman client's `podman cp` command would, on Windows, often fail to copy files into the container due to improper handling of Windows paths ([#14862](https://github.com/containers/podman/issues/14862)).
+- Fixed a bug where the `podman container clone` command did not correctly copy healthcheck settings to the new container ([#21630](https://github.com/containers/podman/issues/21630)).
+- Fixed a bug where the `podman kube play` command would fail to start empty pods ([#25786](https://github.com/containers/podman/issues/25786)).
+- Fixed a bug where the `podman volume ls` command did not output headers when no volumes were present ([#25911](https://github.com/containers/podman/issues/25911)).
+- Fixed a bug where healthcheck configuration provided by a container's image could not be overridden unless the `--health-cmd` option was specified when creating the container ([#20212](https://github.com/containers/podman/issues/20212)).
+- Fixed a bug where the `--user` option to `podman create` and `podman run` could not be used with users added to the container by the `--hostuser` option ([#25805](https://github.com/containers/podman/issues/25805)).
+- Fixed a bug where the `podman system reset` command on FreeBSD would incorrectly print an error.
+- Fixed a bug where stopping the `podman machine start` command with SIGINT could result in machine state being incorrectly set to "Starting" ([#24416](https://github.com/containers/podman/issues/24416)).
+- Fixed a bug where the `podman machine start` command would fail when starting a VM with volume mounts containing spaces using the HyperV machine provider ([#25500](https://github.com/containers/podman/issues/25500)).
+
+### API
+- Fixed a bug where the Compat Create API for Containers ignored ulimits specified in the request when Podman was run rootless ([#25881](https://github.com/containers/podman/issues/25881)).
+
+### Misc
+- Erroneous errors from the `ExecStartAndAttach()` function in the Go bindings for the REST API have been silenced, where the function would incorrectly report errors when stdin was consumed after the exec session was stopped ([#25344](https://github.com/containers/podman/issues/25344)).
+- Updated Buildah to v1.40.0
+- Updated the containers/common library to v0.63.0
+- Updated the containers/image library to v5.35.0
+- Updated the containers/storage library to v1.58.0
+
+## 5.4.2
+### Bugfixes
+- Fixed a bug where the `podman import` command could not import images compressed with algorithms other than gzip ([#25593](https://github.com/containers/podman/issues/25593)).
+- Fixed a bug where the `podman cp` command could deadlock when copying into a non-empty volume on a container that is not running ([#25585](https://github.com/containers/podman/issues/25585)).
+
+### API
+- Fixed a bug where the default values for some fields in the Libpod Create endpoint for Containers did not have sensible defaults for some healthcheck fields, causing unrestricted log growth for containers which did not set these fields ([#25473](https://github.com/containers/podman/issues/25473)).
+
+### Misc
+- Updated vendored Buildah to v1.39.4
+- Updated the containers/common library to v0.62.3
+- Updated the containers/image library to v5.34.3
+- Updated the containers/storage library to v1.57.2
+
+## 5.4.1
+### Bugfixes
+- Fixed a bug where volume quotas were not being applied ([#25368](https://github.com/containers/podman/issues/25368)).
+- Fixed a bug where the `--pid-limit=-1` option did not function properly with containers using the `runc` OCI runtime.
+- Fixed a bug where the `podman artifact pull` command did not respect the `--retry-delay` option.
+- Fixed a bug where Podman would leak a file and directory for every container created.
+- Fixed a bug where the `podman wait` command would sometimes error when waiting for a container set to auto-remove.
+- Fixed a bug where Quadlet `.kube` units would not report an error (and stay running) even when a pod failed to start ([#20667](https://github.com/containers/podman/issues/20667)).
+
+### API
+- Fixed a bug where the Compat DF endpoint did not correctly report total size of all images.
+
+### Misc
+- Updated Buildah to v1.39.2
+- Updated the containers/common library to v0.62.1
+- Updated the containers/image library to v5.34.1
+
+## 5.4.0
+### Features
+- A preview of Podman's support for OCI artifacts has been added through the `podman artifact` suite of commands, including `add`, `inspect`, `ls`, `pull`, `push`, and `rm`. This support is very early and not fully complete, and the command line interface for these tools has not been finalized. We welcome feedback on the new artifact experience through our issue tracker!
+- The `podman update` command now supports a wide variety of options related to healthchecks (including `--health-cmd` to define a new healthcheck and `--no-healthcheck` to disable an existing healthcheck), allowing healthchecks to be added to, removed from, and otherwise updated on existing containers. You can find full details on the 15 added options in the manpage.
+- The `--mount type=volume` option for the `podman run`, `podman create`, and `podman volume create` commands now supports a new option, `subpath=`, to make only a subset of the volume visible in the container ([#20661](https://github.com/containers/podman/issues/20661)).
+- The `--userns=keep-id` option for the `podman run`, `podman create`, and `podman pod create` commands now supports a new option, `--userns=keep-id:size=`, to configure the size of the user namespace ([#24387](https://github.com/containers/podman/issues/24837)).
+- The `podman kube play` command now supports Container Device Interface (CDI) devices ([#17833](https://github.com/containers/podman/issues/17833)).
+- The `podman machine init` command now supports a new option, `--playbook`, to run an Ansible playbook in the created VM on first boot for initial configuration.
+- Quadlet `.pod` files now support a new field, `ShmSize`, to specify the size of the pod's shared SHM ([#22915](https://github.com/containers/podman/issues/22915)).
+- The `podman run`, `podman create`, and `podman pod create` commands now support a new option, `--hosts-file`, to define the base file used for `/etc/hosts` in the container.
+- The `podman run`, `podman create`, and `podman pod create` commands now support a new option, `--no-hostname`, which disables the creation of `/etc/hostname` in the container ([#25002](https://github.com/containers/podman/issues/25002)).
+- The `podman network create` command now supports a new option for `bridge` networks, `--opt mode=unmanaged`, which allows Podman to use an existing network bridge on the system without changes.
+- The `--network` option to `podman run`, `podman create`, and `podman pod create` now accepts a new option for `bridge` networks, `host_interface_name`, which specifies a name for the network interface created outside the container.
+- The `podman manifest rm` command now supports a new option, `--ignore`, to not error when removing manifests that do not exist.
+- The `podman system prune` command now supports a new option, `--build`, to remove build containers leftover from prematurely terminated builds.
+- The `podman events` command now generates events for the creation and removal of networks ([#24032](https://github.com/containers/podman/issues/24032)).
+
+### Breaking Changes
+- Due to a lack of availability of hardware to test on, the Podman maintainers are no longer capable of providing full support for Podman on Intel Macs. Binaries and machine images will still be produced, and pull requests related to MacOS on Intel systems will still be merged, but bugs will be fixed on a best effort basis only. We welcome any potential new maintainers who would be able to assist in restoring full support.
+- Quadlet previously incorrectly allowed `:` as a character to define comments. This was a mistake; developer intent and documentation was that `#` and `;` were to be used as comment characters instead, matching systemd. This has been corrected, and semicolons now define comments instead of colons.
+
+### Changes
+- Podman now passes container hostnames to Netavark, which will use them for any DHCP requests for the container.
+- Partial pulls of `zstd:chunked` images now only happen for images that have a `RootFS.DiffID` entry in the image's OCI config JSON, and require the layer contents to match. This resolves issues with image ID ambiguity when partial pulls were enabled.
+- Packagers can now set the `BUILD_ORIGIN` environment variable when building podman from the `Makefile`. This provides information on who built the Podman binary, and is displayed in `podman version` and  `podman info`. This will help upstream bug reports, allowing maintainers to trace how and where the binary was built and installed from.
+
+### Bugfixes
+- Fixed a bug where `podman machine` VMs on WSL could fail to start when using usermode networking could fail to start due to a port conflict ([#20327](https://github.com/containers/podman/issues/20327)).
+- Fixed a bug where overlay mounts could not be made at paths where the image specifies a volume ([#24555](https://github.com/containers/podman/issues/24555)).
+- Fixed a bug where the `podman build` command did not honor the `no_pivot_root` setting from `containers.conf` ([#24546](https://github.com/containers/podman/issues/24546)).
+- Fixed a bug where volumes would have the wrong permissions if `podman cp` was used to copy into a fresh volume in a container that had never been started.
+- Fixed a bug where using `podman cp` to copy into a named volume requiring a mount (image volumes, volumes backed by a volume plugin, or other volumes with options) would fail when the container being copied into was stopped.
+- Fixed a bug where rlimits would be set incorrectly when Podman was run as root but without `CAP_SYS_RESOURCE` ([#24692](https://github.com/containers/podman/issues/24692)).
+- Fixed a bug where the `podman stats --all` command would fail if a container started with `--cgroups=none` was present ([#24632](https://github.com/containers/podman/issues/24632)).
+- Fixed a bug where the `podman info` command would only return details on one image store even if additional image stores were configured in `storage.conf`.
+- Fixed a bug where the `podman update` command could reset resource limits that were not being modified to default ([#24610](https://github.com/containers/podman/issues/24610)).
+- Fixed a bug where the remote Podman client's `podman update` command could not update resource limits on devices mounted into the container ([#24734](https://github.com/containers/podman/issues/24734)).
+- Fixed a bug where the `podman manifest annotate` command could panic when the `--index` option was used ([#24750](https://github.com/containers/podman/issues/24750)).
+- Fixed a bug where a Quadlet container reusing another container's network could cause errors if the second container was not already running.
+- Fixed a bug where Quadlet files containing lines with a trailing backslash could cause an infinite loop during parsing ([#24810](https://github.com/containers/podman/issues/24810)).
+- Fixed a bug where Quadlet would, when run as a non-root user, not generate for files in subfolders of `/etc/containers/systemd/users/` ([#24783](https://github.com/containers/podman/issues/24783)).
+- Fixed a bug where values in Quadlet files containing octal escape sequences were incorrectly unescaped.
+- Fixed a bug where `podman generate kube` could generate persistent volumes with mixed-case names or names containing an underscore, which are not supported by Kubernetes ([#16542](https://github.com/containers/podman/issues/16542)).
+- Fixed a bug where the `ptmxmode` option to `--mount type=devpts` did not function.
+- Fixed a bug where shell completion on Windows would include `.exe` in the executable name, breaking completion on some shells.
+- Fixed a bug where the output of `podman inspect` on containers did not include the ID of the network the container was joined to, improving Docker compatibility ([#24910](https://github.com/containers/podman/issues/24910)).
+- Fixed a bug where containers created with the remote API incorrectly included a create command ([#25026](https://github.com/containers/podman/issues/25026)).
+- Fixed a bug where it was possible to specify the `libkrun` backend for VMs on Intel Macs (`libkrun` only supports Arm systems).
+- Fixed a bug where `libkrun` and `applehv` VMs from `podman machine` could be started at the same time on Macs ([#25112](https://github.com/containers/podman/issues/25112)).
+- Fixed a bug where `podman exec` commands could not detach from the exec session using the detach keys ([#24895](https://github.com/containers/podman/issues/24895)).
+- Fixed a bug where Podman would fail to start due to a database configuration mismatch when certain fields were configured to the empty string ([#24738](https://github.com/containers/podman/issues/24738)).
+
+### API
+- The Compat and Libpod Build APIs for Images now support a new query parameter, `nohosts`, which (when set to true) does not create `/etc/hosts` in the image when building.
+- Fixed a bug where the Compat Create API for Containers did not honor CDI devices, preventing (among other things) the use of GPUs with `docker compose` ([#19338](https://github.com/containers/podman/issues/19338)).
+
+### Misc
+- The Docker alias script has been fixed to better handle variable substitution.
+- Fixed a bug where `podman-restart.service` functioned incorrectly when no containers were present.
+- Updated Buildah to v1.39.0
+- Updated the containers/common library to v0.62.0
+- Updated the containers/storage library to v1.57.1
+- Updated the containers/image library to v5.34.0
+
+## 5.3.2
+### Security
+- This release contains Buildah v1.38.1 which addresses [CVE-2024-11218](https://github.com/advisories/GHSA-5vpc-35f4-r8w6).
+
+### Bugfixes
+- Fixed a bug where Quadlet `.build` files could create an invalid podman command line when `Pull=` was used ([#24599](https://github.com/containers/podman/issues/24599)).
+- Fixed a bug where the Mac installer did not install the Podman manpages ([#24756](https://github.com/containers/podman/issues/24756)).
+
+### Misc
+- Updated Buildah to v1.38.1
+- Updated the containers/common library to v0.61.1
+- Updated the containers/storage library to v1.56.1
+- Updated the containers/image library to v5.33.1
+
+## 5.3.1
+### Bugfixes
+- Fixed a bug where the `--ignition-path` option to `podman machine init` would prevent creation of necessary files for the VM, rendering it unusable ([#23544](https://github.com/containers/podman/issues/23544)).
+- Fixed a bug where rootless containers using the `bridge` networking mode would be unable to start due to a panic caused by a nil pointer dereference ([#24566](https://github.com/containers/podman/issues/24566)).
+- Fixed a bug where Podman containers would try to set increased rlimits when started in a user namespace, rendering containers unable to start ([#24508](https://github.com/containers/podman/issues/24508)).
+- Fixed a bug where certain SSH configurations would make the remote Podman client unable to connect to the server ([#24567](https://github.com/containers/podman/issues/24567)).
+- Fixed a bug where the Windows installer could install WSLv2 when upgrading an existing Podman installation that used the Hyper-V virtualization backend.
+
+## 5.3.0
+### Features
+- The `podman kube generate` and `podman kube play` commands can now create and run Kubernetes Job YAML ([#17011](https://github.com/containers/podman/issues/17011)).
+- The `podman kube generate` command now includes information on the user namespaces for pods and containers in generated YAML. The `podman kube play` command uses this information to duplicate the user namespace configuration when creating new pods based on the YAML.
+- The `podman kube play` command now supports Kubernetes volumes of type image ([#23775](https://github.com/containers/podman/issues/23775)).
+- The service name of systemd units generated by Quadlet can now be set with the `ServiceName` key in all supported Quadlet files ([#23414](https://github.com/containers/podman/issues/23414)).
+- Quadlets can now disable their implicit dependency on `network-online.target` via a new key, `DefaultDependencies`, supported by all Quadlet files ([#24193](https://github.com/containers/podman/issues/24193)).
+- Quadlet `.container` and `.pod` files now support a new key, `AddHost`, to add hosts to the container or pod.
+- The `PublishPort` key in Quadlet `.container` and `.pod` files can now accept variables in its value ([#24081](https://github.com/containers/podman/issues/24081)).
+- Quadlet `.container` files now support two new keys, `CgroupsMode` and `StartWithPod`, to configure cgroups for the container and whether the container will be started with the pod it is part of ([#23664](https://github.com/containers/podman/issues/23664) and [#24401](https://github.com/containers/podman/issues/24401)).
+- Quadlet `.container` files can now use the network of another container by specifying the `.container` file of the container to share with in the `Network` key.
+- Quadlet `.container` files can now mount images managed by `.image` files into the container by using the `Mount=type=image` key with a `.image` target.
+- Quadlet `.pod` files now support six new keys, `DNS`, `DNSOption`, `DNSSearch`, `IP`, `IP6`, and `UserNS`, to configure DNS, static IPs, and user namespace settings for the pod ([#23692](https://github.com/containers/podman/issues/23692)).
+- Quadlet `.image` files can now give an image multiple times by specifying the `ImageTag` key multiple times ([#23781](https://github.com/containers/podman/issues/23781)).
+- Quadlets can now be placed in the `/run/containers/systemd` directory as well as existing directories like `$HOME/containers/systemd` and `/etc/containers/systemd/users`.
+- Quadlet now properly handles subdirectories of a unit directory being a symlink ([#23755](https://github.com/containers/podman/issues/23755)).
+- The `podman manifest inspect` command now includes the manifest's annotations in its output.
+- The output of the `podman inspect` command for containers now includes a new field, `HostConfig.AutoRemoveImage`, which shows whether a container was created with the `--rmi` option set.
+- The output of the `podman inspect` command for containers now includes a new field, `Config.ExposedPorts`, which includes all exposed ports from the container, improving Docker compatibility.
+- The output of the `podman inspect` command for containers now includes a new field, `Config.StartupHealthCheck`, which shows the container's startup healthcheck configuration.
+- The output of the `podman inspect` command for containers now includes a new field in `Mounts`, `SubPath`, which contains any subpath set for image or named volumes.
+- The `podman machine list` command now supports a new option, `--all-providers`, which lists machines from all supported VM providers, not just the one currently in use.
+- VMs run by `podman machine` on Windows will now provide API access by exposing a Unix socket on the host filesystem which forwards into the VM ([#23408](https://github.com/containers/podman/issues/23408)).
+- The `podman buildx prune` and `podman image prune` commands now support a new option, `--build-cache`, which will also clean the build cache.
+- The Windows installer has a new radio button to select virtualization provider (WSLv2 or Hyper-V).
+- The `--add-host` option to `podman create`, `podman run`, and `podman pod create` now supports specifying multiple hostnames, semicolon-separated (e.g. `podman run --add-host test1;test2:192.168.1.1`) ([#23770](https://github.com/containers/podman/issues/23770)).
+- The `podman run` and `podman create` commands now support three new options for configuring healthcheck logging: `--health-log-destination` (specify where logs are stored), `--health-max-log-count` (specify how many healthchecks worth of logs are stored), and `--health-max-log-size` (specify the maximum size of the healthcheck log).
+
+### Changes
+- Podman now uses the Pasta `--map-guest-addr` option by default which is used for the `host.containers.internal` entry in `/etc/hosts` to allow containers to reach the host by default ([#19213](https://github.com/containers/podman/issues/19213)).
+- The names of the infra containers of pods created by Quadlet are changed to the pod name suffixed with `-infra` ([#23665](https://github.com/containers/podman/issues/23665)).
+- The `podman system connection add` command now respects HTTP path prefixes specified with `tcp://` URLs.
+- Proxy environment variables (e.g. `https_proxy`) declared in `containers.conf` no longer escape special characters in their values when used with `podman machine` VMs ([#23277](https://github.com/containers/podman/issues/23277)).
+- The `podman images --sort=repository` command now also sorts by image tag as well, guaranteeing deterministic output ordering ([#23803](https://github.com/containers/podman/issues/23803)).
+- When a user has a rootless `podman machine` VM running and second rootful `podman machine` VM initialized, and the rootless VM is removed, the connection to the second, rootful machine now becomes the default as expected ([#22577](https://github.com/containers/podman/issues/22577)).
+- Environment variable secrets are no longer contained in the output of `podman inspect` on a container the secret is used in ([#23788](https://github.com/containers/podman/issues/23788)).
+- Podman no longer exits 0 on SIGTERM by default.
+- Podman no longer explicitly sets rlimits to their default value, as this could lower the actual value available to containers if it had been set higher previously.
+- Quadlet user units now correctly wait for the network to be ready to use via a new service, `podman-user-wait-network-online.service`, instead of the user session's nonfunctional `network-online.target`.
+- Exposed ports in the output of `podman ps` are now correctly grouped and deduplicated when they are also published ([#23317](https://github.com/containers/podman/issues/23317)).
+- Quadlet build units no longer use `RemainAfterExit=yes` by default.
+
+### Bugfixes
+- Fixed a bug where the `--build-context` option to `podman build` did not function properly on Windows, breaking compatibility with Visual Studio Dev Containers ([#17313](https://github.com/containers/podman/issues/17313)).
+- Fixed a bug where Quadlet would generate bad arguments to Podman if the `SecurityLabelDisable` or `SecurityLabelNested` keys were used ([#23432](https://github.com/containers/podman/issues/23432)).
+- Fixed a bug where the `PODMAN_COMPOSE_WARNING_LOGS` environment variable did not suppress warnings printed by `podman compose` that it was redirecting to an external provider.
+- Fixed a bug where, if the `podman container cleanup` command was run on a container in the process of being removed, an error could be printed.
+- Fixed a bug where rootless Quadlet units placed in `/etc/containers/systemd/users/` would be loaded for root as well when `/etc/containers/systemd` was a symlink ([#23483](https://github.com/containers/podman/issues/23483)).
+- Fixed a bug where the remote Podman client's `podman stop` command would, if called with `--cidfile` pointing to a non-existent file and the `--ignore` option set, stop all containers ([#23554](https://github.com/containers/podman/issues/23554)).
+- Fixed a bug where the `podman wait` would only exit only after 20 second when run on a container which rapidly exits and is then restarted by the `on-failure` restart policy.
+- Fixed a bug where `podman volume rm` and `podman run -v` could deadlock when run simultaneously on the same volume ([#23613](https://github.com/containers/podman/issues/23613)).
+- Fixed a bug where running `podman mount` on a container in the process of being created could cause a nonsensical error indicating the container already existed ([#23637](https://github.com/containers/podman/issues/23637)).
+- Fixed a bug where the `podman stop` command could deadlock when run on containers with very large annotations ([#22246](https://github.com/containers/podman/issues/22246)).
+- Fixed a bug where the `podman machine stop` command could segfault on Mac when a VM failed to stop gracefully ([#23654](https://github.com/containers/podman/issues/23654)).
+- Fixed a bug where the `podman stop` command would not ensure containers created with `--rm` were removed when it exited ([#22852](https://github.com/containers/podman/issues/22852)).
+- Fixed a bug where the `--rmi` option to `podman run` did not function correctly with detached containers.
+- Fixed a bug where running `podman inspect` on a container on FreeBSD would emit an incorrect value for the `HostConfig.Device` field, breaking compatibility with the Ansible Podman module.
+- Fixed a bug where rootless Podman could fail to start containers using the `--cgroup-parent` option ([#23780](https://github.com/containers/podman/issues/23780)).
+- Fixed a bug where the `podman build -v` command did not properly handle Windows paths passed as the host directory.
+- Fixed a bug where Podman could leak network namespace files if it was interrupted while creating a network namespace ([#24044](https://github.com/containers/podman/issues/24044)).
+- Fixed a bug where the remote Podman client's `podman run` command could sometimes fail to retrieve a container's exit code for containers run with the `--rm` option.
+- Fixed a bug where `podman machine` on Windows could fail to run VMs for certain usernames containing special characters.
+- Fixed a bug where Quadlet would reject `RemapUsers=keep-id` when run as root.
+- Fixed a bug where XFS quotas on volumes were not unique, meaning that all volumes using a quota shared the same maximum size and inodes (set by the most recent volume with a quota to be created).
+- Fixed a bug where `Service` section of Quadlet files would only use defaults and not respect user input ([#24322](https://github.com/containers/podman/issues/24322)).
+- Fixed a bug where `podman volume ls` would sometimes fail when a volume was removed at the same time it was run.
+- Fixed a bug where the `--tz=local` option could not be used when the `TZDIR` environment variable was set.
+
+### API
+- The Play API for Kubernetes YAML now supports `application/x-tar` compressed context directories ([#24015](https://github.com/containers/podman/pull/24015)).
+- Fixed a bug in the Attach API for Containers (for both Compat and Libpod endpoints) which could cause inconsistent failures due to a race condition ([#23757](https://github.com/containers/podman/issues/23757)).
+- Fixed a bug where the output for the Compat Top API for Containers did not properly split the output into an array ([#23981](https://github.com/containers/podman/issues/23981)).
+- Fixed a bug where the Info API could fail when running `podman system service` via a socket-activated systemd service ([#24152](https://github.com/containers/podman/issues/24152)).
+- Fixed a bug where the Events and Logs endpoints for Containers now send status codes immediately, as opposed to when the first event or log line is sent ([#23712](https://github.com/containers/podman/issues/23712)).
+
+### Misc
+- Podman now requires Golang 1.22 or higher to build.
+- The output of `podman machine start` has been improved when trying to start a machine when another is already running ([#23436](https://github.com/containers/podman/issues/23436)).
+- Quadlet will no longer log spurious ENOENT errors when resolving unit directories ([#23620](https://github.com/containers/podman/issues/23620)).
+- The Docker alias shell script will now also honor the presence of `$XDG_CONFIG_HOME/containers/nodocker` when considering whether it should print its warning message that Podman is in use.
+- The podman-auto-update systemd unit files have been moved into the `contrib/systemd/system` directory in the repo for consistency with our other unit files.
+- Updated Buildah to v1.38.0
+- Updated the containers/common library to v0.61.0
+- Updated the containers/storage library to v1.56.0
+- Updated the containers/image library to v5.33.0
+
+## 5.2.5
+### Security
+- This release addresses [CVE-2024-9675](https://access.redhat.com/security/cve/cve-2024-9675), which allows arbitrary access to the host filesystem from `RUN --mount type=cache` arguments to a Dockerfile being built.
+- This release also addresses [CVE-2024-9676](https://access.redhat.com/security/cve/cve-2024-9676), which allows malicious images with a symlink `/etc/passwd` or `/etc/group` to potentially cause a denial of service through reading a FIFO on the host.
+
+### Misc
+- Updated Buildah to v1.37.5
+- Updated the containers/storage library to v1.55.1
+
+## 5.2.4
+### Security
+- This release addresses [CVE-2024-9407](https://github.com/advisories/GHSA-fhqq-8f65-5xfc), which allows arbitrary access to the host filesystem from `RUN --mount` arguments to a Dockerfile being built.
+- This release also addresses [CVE-2024-9341](https://github.com/advisories/GHSA-mc76-5925-c5p6), allowing the mounting of arbitrary directories from the host into containers on FIPS enabled systems using a malicious image with crafted symlinks.
+
+### Misc
+- Updated Buildah to v1.37.4
+- Updated the containers/common library to v0.60.4
+
+## 5.2.3
+### Bugfixes
+- Fixed a bug that could cause network namespaces to fail to unmount, resulting in Podman commands hanging.
+- Fixed a bug where Podman could not run images which included SCTP exposed ports.
+- Fixed a bug where containers run by the root user, but inside a user namespace (including inside a container), could not use the `pasta` network mode.
+- Fixed a bug where volume copy-up did not properly chown empty volumes when the `:idmap` mount option was used.
+
+### Misc
+- Updated Buildah to v1.37.3
+
+## 5.2.2
+### Bugfixes
+- Fixed a bug where rootless Podman could fail to validate the runtime's volume path on systems with a symlinked `/home` ([#23515](https://github.com/containers/podman/issues/23515)).
+
+### Misc
+- Updated Buildah to v1.37.2
+- Updated the containers/common library to v0.60.2
+- Updated the containers/image library to v5.32.2
+
+## 5.2.1
+### Bugfixes
+- Fixed a bug where Podman could sometimes save an incorrect container state to the database, which could cause a number of issues including but not limited to attempting to clean up containers twice ([#21569](https://github.com/containers/podman/issues/21569)).
+
+### Misc
+- Updated Buildah to v1.37.1
+- Updated the containers/common library to v0.60.1
+- Updated the containers/image library to v5.32.1
+
+## 5.2.0
+### Features
+- Podman now supports `libkrun` as a backend for creating virtual machines on MacOS. The `libkrun` backend has the advantage of allowing GPUs to be mounted into the virtual machine to accelerate tasks. The default backend remains `applehv`.
+- Quadlet now has support for `.build` files, which allows images to be built by Quadlet and then used by Quadlet containers.
+- Quadlet `.container` files now support two new fields, `LogOpt` to specify container logging configuration and `StopSignal` to specify container stop signal ([#23050](https://github.com/containers/podman/issues/23050)).
+- Quadlet `.container` and `.pod` files now support a new field, `NetworkAlias`, to add network aliases.
+- Quadlet drop-in search paths have been expanded to include top-level type drop-ins (`container.d`, `pod.d`) and truncated unit drop-ins (`unit-.container.d`) ([#23158](https://github.com/containers/podman/issues/23158)).
+- Podman now supports a new command, `podman system check`, which will identify (and, if possible, correct) corruption within local container storage.
+- The `podman machine reset` command will now reset all providers available on the current operating system (e.g. ensuring that both HyperV and WSL `podman machine` VMs will be removed on Windows).
+
+### Changes
+- Podman now requires the new kernel mount API, introducing a dependency on Linux Kernel v5.2 or higher.
+- Quadlet `.image` units now have a dependency on `network-online.target` ([#21873](https://github.com/containers/podman/issues/21873)).
+- The `--device` option to `podman create` and `podman run` is no longer ignored when `--privileged` is also specified ([#23132](https://github.com/containers/podman/issues/23132)).
+- The `podman start` and `podman stop` commands no longer print the full ID of the pod started/stopped, but instead the user's input used to specify the pod (e.g. `podman pod start b` will print `b` instead of the pod's full ID) ([#22590](https://github.com/containers/podman/issues/22590)).
+- Virtual machines created by `podman machine` on Linux now use `virtiofs` instead of `9p` for mounting host filesystems. Existing mounts will be transparently changed on machine restart or recreation. This should improve performance and reliability of host mounts. This requires the installation of `virtiofsd` on the host system to function.
+- Using both the `--squash` and `--layers=false` options to `podman build` at the same time is now allowed.
+- Podman now passes container's stop timeout to systemd when creating cgroups, causing it to be honored when systemd stops the scope. This should prevent hangs on system shutdown due to running Podman containers.
+- The `--volume-driver` option to `podman machine init` is now deprecated.
+
+### Bugfixes
+- Fixed a bug where rootless containers created with the `--sdnotify=healthy` option could panic when started ([#22651](https://github.com/containers/podman/issues/22651)).
+- Fixed a bug where containers created with the `--sdnotify=healthy` option that exited quickly would sometimes return an error instead of notifying that the container was ready ([#22760](https://github.com/containers/podman/issues/22760)).
+- Fixed a bug where the `podman system reset` command did not remove the containers/image blob cache ([#22825](https://github.com/containers/podman/issues/22825)).
+- Fixed a bug where Podman would sometimes create a cgroup for itself even when the `--cgroups=disabled` option was specified at container creation time ([#20910](https://github.com/containers/podman/issues/20910)).
+- Fixed a bug where the `/etc/hosts` file in a container was not created with a newline at the end of the file ([#22729](https://github.com/containers/podman/issues/22729)).
+- Fixed a bug where the `podman start` command could sometimes panic when starting a container in the stopped state.
+- Fixed a bug where the `podman system renumber` command would fail if volumes existed when using the `sqlite` database backend ([#23052](https://github.com/containers/podman/issues/23052)).
+- Fixed a bug where the `podman container restore` command could not successfully restore a container in a pod.
+- Fixed a bug where an error message from `podman diff` would suggest using the `--latest` option when using the remote Podman client ([#23038](https://github.com/containers/podman/issues/23038)).
+- Fixed a bug where user could assign more memory to a Podman machine than existed on the host ([#18206](https://github.com/containers/podman/issues/18206)).
+- Fixed a bug where the `podman events` command was rarely unable to report errors that occurred ([#23165](https://github.com/containers/podman/issues/23165)).
+- Fixed a bug where containers run in systemd units would sometimes not be removed correctly on exit when using the `--cidfile` option.
+- Fixed a bug where the first Podman command run after a reboot could cause hang when using transient mode ([#22984](https://github.com/containers/podman/issues/22984)).
+- Fixed a bug where Podman could throw errors about a database configuration mismatch if certain paths did not exist on the host.
+- Fixed a bug where the `podman run` and `podman start` commands could throw strange errors if another Podman process stopped the container at a midpoint in the process of starting ([#23246](https://github.com/containers/podman/issues/23246)).
+- Fixed a bug where the `podman system service` command could leak a mount on termination.
+- Fixed a bug where the Podman remote client would panic if an invalid image filter was passed to `podman images` ([#23120](https://github.com/containers/podman/issues/23120)).
+- Fixed a bug where the `podman auto-update` and `podman system df` commands could fail when a container was removed while the command was running ([#23279](https://github.com/containers/podman/issues/23279)).
+- Fixed a bug where the `podman machine init` command could panic when trying to decompress an empty file when preparing the VM image ([#23281](https://github.com/containers/podman/issues/23281)).
+- Fixed a bug where the `podman ps --pod` and `podman pod stats` commands could sometimes fail when a pod was removed while the command was running ([#23282](https://github.com/containers/podman/issues/23282)).
+- Fixed a bug where the `podman stats` and `podman pod stats` commands would sometimes exit with a `container is stopped` error when showing all containers (or pod containers, for `pod stats`) if a container stopped while the command was running ([#23334](https://github.com/containers/podman/issues/23334)).
+- Fixed a bug where the output of container healthchecks was not properly logged if it did not include a final newline ([#23332](https://github.com/containers/podman/issues/23332)).
+- Fixed a bug where the port forwarding firewall rules of an existing container could be be overwritten when starting a second container which forwarded the same port on the host even if the second container failed to start as the port was already bound.
+- Fixed a bug where the containers created by the `podman play kube` command could sometimes not properly clean up their network stacks ([#21569](https://github.com/containers/podman/issues/21569)).
+
+### API
+- The Build API for Images now accepts a comma-separated list in the Platform query parameter, allowing a single API call to built an image for multiple architectures ([#22071](https://github.com/containers/podman/issues/22071)).
+- Fixed a bug where the Remove endpoint for Volumes would return an incorrectly formatted error when called with an ambiguous volume name ([#22616](https://github.com/containers/podman/issues/22616)).
+- Fixed a bug where the Stats endpoint for Containers would return an incorrectly formatted error when called on a container that did not exist ([#22612](https://github.com/containers/podman/issues/22612)).
+- Fixed a bug where the Start endpoint for Pods would return a 409 error code in cases where a 500 error code should have been returned ([#22989](https://github.com/containers/podman/issues/22989)).
+- Fixed a bug where the Top endpoint for Pods would return a 200 status code and then subsequently an error ([#22986](https://github.com/containers/podman/issues/22986)).
+
+### Misc
+- Podman no longer requires all parent directories of its root and runroot to be world-executable ([#23028](https://github.com/containers/podman/issues/23028)).
+- Error messages from the `podman build` command when the `-f` option is given, but points to a file that does not exist, have been improved ([#22940](https://github.com/containers/podman/issues/22940)).
+- The Podman windows installer is now built using WiX 5.
+- Updated the gvisor-tap-vsock library to v0.7.4. This release contains a fix for a gvproxy crash on macOS when there is heavy network traffic on a fast link.
+- Updated Buildah to v1.37.0
+- Updated the containers/image library to v5.32.0
+- Updated the containers/storage library to v1.55.0
+- Updated the containers/common library to v0.60.0
+
+## 5.1.2
+### Bugfixes
+- Fixed a bug that would sometimes prevent the mount of some `podman machine` volumes into the virtual machine when using the Apple hypervisor ([#22569](https://github.com/containers/podman/issues/22569)).
+- Fixed a bug where `podman top` would show the incorrect UID for processes in containers run in a user namespace ([#22293](https://github.com/containers/podman/issues/22293)).
+- Fixed a bug where the `/etc/hosts` and `/etc/resolv.conf` files in a container would be empty after restoring from a checkpoint ([#22901](https://github.com/containers/podman/issues/22901)).
+- Fixed a bug where the `--pod-id-file` argument to `podman run` and `podman create` did not respect the pod's user namespace ([#22931](https://github.com/containers/podman/issues/22931)).
+- Fixed a bug in the Podman remote client where specifying a invalid connection in the `CONTAINER_CONNECTION` environment variable would lead to a panic.
+
+### Misc
+- Virtual machines run by `podman machine` using the Apple hypervisor now wait 90 seconds before forcibly stopping the VM, matching the standard systemd shutdown timeout ([#22515](https://github.com/containers/podman/issues/22515)).
+- Updates the containers/image library to v5.31.1
+
+## 5.1.1
+### Bugfixes
+- Fixed a bug where systemd timers associated with startup healthchecks would not be properly deleted after transitioning to the regular healthcheck ([#22884](https://github.com/containers/podman/issues/22884)).
+
+### Misc
+- Updated the containers/common library to v0.59.1
+
 ## 5.1.0
 ### Features
 - VMs created by `podman machine` on macOS with Apple silicon can now use Rosetta 2 (a.k.a Rosetta) for high-speed emulation of x86 code. This is enabled by default. If you wish to change this option, you can do so in `containers.conf`.

@@ -166,7 +166,7 @@ func (r *Runtime) hostInfo() (*define.HostInfo, error) {
 	var buffer bytes.Buffer
 	buffer.WriteString(fmt.Sprintf("%.0fh %.0fm %.2fs",
 		uptime.hours,
-		math.Mod(uptime.seconds, 3600)/60,
+		math.Mod(uptime.minutes, 60),
 		math.Mod(uptime.seconds, 60),
 	))
 	if int64(uptime.hours) > 0 {
@@ -231,14 +231,15 @@ func (r *Runtime) storeInfo() (*define.StoreInfo, error) {
 	if err := syscall.Statfs(r.store.GraphRoot(), &grStats); err != nil {
 		return nil, fmt.Errorf("unable to collect graph root usage for %q: %w", r.store.GraphRoot(), err)
 	}
-	allocated := uint64(grStats.Bsize) * grStats.Blocks
+	bsize := uint64(grStats.Bsize) //nolint:unconvert,nolintlint // Bsize is not always uint64 on Linux.
+	allocated := bsize * grStats.Blocks
 	info := define.StoreInfo{
 		ImageStore:         imageInfo,
 		ImageCopyTmpDir:    os.Getenv("TMPDIR"),
 		ContainerStore:     conInfo,
 		GraphRoot:          r.store.GraphRoot(),
 		GraphRootAllocated: allocated,
-		GraphRootUsed:      allocated - (uint64(grStats.Bsize) * grStats.Bfree),
+		GraphRootUsed:      allocated - (bsize * grStats.Bfree),
 		RunRoot:            r.store.RunRoot(),
 		GraphDriverName:    r.store.GraphDriverName(),
 		GraphOptions:       nil,
@@ -250,7 +251,8 @@ func (r *Runtime) storeInfo() (*define.StoreInfo, error) {
 	graphOptions := map[string]interface{}{}
 	for _, o := range r.store.GraphOptions() {
 		split := strings.SplitN(o, "=", 2)
-		if strings.HasSuffix(split[0], "mount_program") {
+		switch {
+		case strings.HasSuffix(split[0], "mount_program"):
 			ver, err := version.Program(split[1])
 			if err != nil {
 				logrus.Warnf("Failed to retrieve program version for %s: %v", split[1], err)
@@ -260,7 +262,17 @@ func (r *Runtime) storeInfo() (*define.StoreInfo, error) {
 			program["Version"] = ver
 			program["Package"] = version.Package(split[1])
 			graphOptions[split[0]] = program
-		} else {
+		case strings.HasSuffix(split[0], "imagestore"):
+			key := strings.ReplaceAll(split[0], "imagestore", "additionalImageStores")
+			if graphOptions[key] == nil {
+				graphOptions[key] = []string{split[1]}
+			} else {
+				graphOptions[key] = append(graphOptions[key].([]string), split[1])
+			}
+			// Fallthrough to include the `imagestore` key to avoid breaking
+			// Podman v5 API. Should be removed in Podman v6.0.0.
+			fallthrough
+		default:
 			graphOptions[split[0]] = split[1]
 		}
 	}

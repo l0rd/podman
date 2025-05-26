@@ -55,7 +55,7 @@ func startFlags(cmd *cobra.Command) {
 	flags.StringVar(&startOptions.DetachKeys, detachKeysFlagName, containerConfig.DetachKeys(), "Select the key sequence for detaching a container. Format is a single character `[a-Z]` or a comma separated sequence of `ctrl-<value>`, where `<value>` is one of: `a-z`, `@`, `^`, `[`, `\\`, `]`, `^` or `_`")
 	_ = cmd.RegisterFlagCompletionFunc(detachKeysFlagName, common.AutocompleteDetachKeys)
 
-	flags.BoolVarP(&startOptions.Interactive, "interactive", "i", false, "Keep STDIN open even if not attached")
+	flags.BoolVarP(&startOptions.Interactive, "interactive", "i", false, "Make STDIN available to the contained process")
 	flags.BoolVar(&startOptions.SigProxy, "sig-proxy", false, "Proxy received signals to the process (default true if attaching, false otherwise)")
 
 	filterFlagName := "filter"
@@ -131,7 +131,7 @@ func start(cmd *cobra.Command, args []string) error {
 		startOptions.Filters[fname] = append(startOptions.Filters[fname], filter)
 	}
 
-	responses, err := registry.ContainerEngine().ContainerStart(registry.GetContext(), containers, startOptions)
+	responses, err := registry.ContainerEngine().ContainerStart(registry.Context(), containers, startOptions)
 	if err != nil {
 		return err
 	}

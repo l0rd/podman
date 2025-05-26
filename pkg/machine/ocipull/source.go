@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/containers/image/v5/image"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/oci/layout"
 	"github.com/containers/image/v5/types"
@@ -34,9 +35,6 @@ func GetLocalBlob(ctx context.Context, path string) (*types.BlobInfo, error) {
 		return nil, err
 	}
 	blobs := img.LayerInfos()
-	if err != nil {
-		return nil, err
-	}
 	if len(blobs) != 1 {
 		return nil, errors.New("invalid disk image")
 	}
@@ -45,7 +43,7 @@ func GetLocalBlob(ctx context.Context, path string) (*types.BlobInfo, error) {
 }
 
 func GetDiskArtifactReference(ctx context.Context, imgSrc types.ImageSource, opts *DiskArtifactOpts) (digest.Digest, error) {
-	rawMannyFest, mannyType, err := imgSrc.GetManifest(ctx, nil)
+	rawMannyFest, mannyType, err := image.UnparsedInstance(imgSrc, nil).Manifest(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -92,7 +90,7 @@ func GetDiskArtifactReference(ctx context.Context, imgSrc types.ImageSource, opt
 	if artifactDigest == "" {
 		return "", fmt.Errorf("no valid disk artifact found")
 	}
-	v1RawMannyfest, _, err := imgSrc.GetManifest(ctx, &artifactDigest)
+	v1RawMannyfest, _, err := image.UnparsedInstance(imgSrc, &artifactDigest).Manifest(ctx)
 	if err != nil {
 		return "", err
 	}

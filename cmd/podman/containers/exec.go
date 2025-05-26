@@ -50,6 +50,7 @@ var (
 	envInput, envFile []string
 	execOpts          entities.ExecOptions
 	execDetach        bool
+	execCidFile       string
 )
 
 func execFlags(cmd *cobra.Command) {
@@ -63,6 +64,10 @@ func execFlags(cmd *cobra.Command) {
 	flags.StringVar(&execOpts.DetachKeys, detachKeysFlagName, containerConfig.DetachKeys(), "Select the key sequence for detaching a container. Format is a single character [a-Z] or ctrl-<value> where <value> is one of: a-z, @, ^, [, , or _")
 	_ = cmd.RegisterFlagCompletionFunc(detachKeysFlagName, common.AutocompleteDetachKeys)
 
+	cidfileFlagName := "cidfile"
+	flags.StringVar(&execCidFile, cidfileFlagName, "", "File to read the container ID from")
+	_ = cmd.RegisterFlagCompletionFunc(cidfileFlagName, completion.AutocompleteDefault)
+
 	envFlagName := "env"
 	flags.StringArrayVarP(&envInput, envFlagName, "e", []string{}, "Set environment variables")
 	_ = cmd.RegisterFlagCompletionFunc(envFlagName, completion.AutocompleteNone)
@@ -71,7 +76,7 @@ func execFlags(cmd *cobra.Command) {
 	flags.StringArrayVar(&envFile, envFileFlagName, []string{}, "Read in a file of environment variables")
 	_ = cmd.RegisterFlagCompletionFunc(envFileFlagName, completion.AutocompleteDefault)
 
-	flags.BoolVarP(&execOpts.Interactive, "interactive", "i", false, "Keep STDIN open even if not attached")
+	flags.BoolVarP(&execOpts.Interactive, "interactive", "i", false, "Make STDIN available to the contained process")
 	flags.BoolVar(&execOpts.Privileged, "privileged", podmanConfig.ContainersConfDefaultsRO.Containers.Privileged, "Give the process extended Linux capabilities inside the container.  The default is false")
 	flags.BoolVarP(&execOpts.Tty, "tty", "t", false, "Allocate a pseudo-TTY. The default is false")
 
@@ -116,16 +121,12 @@ func init() {
 }
 
 func exec(cmd *cobra.Command, args []string) error {
-	var nameOrID string
+	nameOrID, command, err := determineTargetCtrAndCmd(args, execOpts.Latest, execCidFile != "")
+	if err != nil {
+		return err
+	}
+	execOpts.Cmd = command
 
-	if len(args) == 0 && !execOpts.Latest {
-		return errors.New("exec requires the name or ID of a container or the --latest flag")
-	}
-	execOpts.Cmd = args
-	if !execOpts.Latest {
-		execOpts.Cmd = args[1:]
-		nameOrID = strings.TrimPrefix(args[0], "/")
-	}
 	// Validate given environment variables
 	execOpts.Envs = make(map[string]string)
 	for _, f := range envFile {
@@ -178,17 +179,44 @@ func exec(cmd *cobra.Command, args []string) error {
 		streams.AttachOutput = true
 		streams.AttachError = true
 
-		exitCode, err := registry.ContainerEngine().ContainerExec(registry.GetContext(), nameOrID, execOpts, streams)
+		exitCode, err := registry.ContainerEngine().ContainerExec(registry.Context(), nameOrID, execOpts, streams)
 		registry.SetExitCode(exitCode)
 		return err
 	}
 
-	id, err := registry.ContainerEngine().ContainerExecDetached(registry.GetContext(), nameOrID, execOpts)
+	id, err := registry.ContainerEngine().ContainerExecDetached(registry.Context(), nameOrID, execOpts)
 	if err != nil {
 		return err
 	}
 	fmt.Println(id)
 	return nil
+}
+
+// determineTargetCtrAndCmd determines which command exec should run in which container
+func determineTargetCtrAndCmd(args []string, latestSpecified bool, execCidFileProvided bool) (string, []string, error) {
+	var nameOrID string
+	var command []string
+
+	if len(args) == 0 && !latestSpecified && !execCidFileProvided {
+		return "", nil, errors.New("exec requires the name or ID of a container or the --latest or --cidfile flag")
+	} else if latestSpecified && execCidFileProvided {
+		return "", nil, errors.New("--latest and --cidfile can not be used together")
+	}
+	command = args
+	if !latestSpecified {
+		if !execCidFileProvided {
+			// assume first arg to be name or ID
+			command = args[1:]
+			nameOrID = strings.TrimPrefix(args[0], "/")
+		} else {
+			content, err := os.ReadFile(execCidFile)
+			if err != nil {
+				return "", nil, fmt.Errorf("reading CIDFile: %w", err)
+			}
+			nameOrID = strings.Split(string(content), "\n")[0]
+		}
+	}
+	return nameOrID, command, nil
 }
 
 func execWait(ctr string, seconds int32) error {

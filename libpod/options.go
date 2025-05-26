@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -326,6 +324,17 @@ func WithCDI(devices []string) CtrCreateOption {
 			return define.ErrCtrFinalized
 		}
 		ctr.config.CDIDevices = devices
+		return nil
+	}
+}
+
+func WithCDISpecDirs(cdiSpecDirs []string) RuntimeOption {
+	return func(rt *Runtime) error {
+		if rt.valid {
+			return define.ErrRuntimeFinalized
+		}
+
+		rt.config.Engine.CdiSpecDirs.Set(cdiSpecDirs)
 		return nil
 	}
 }
@@ -1391,6 +1400,19 @@ func WithUseImageResolvConf() CtrCreateOption {
 	}
 }
 
+// WithUseImageHostname tells the container not to bind-mount /etc/hostname in.
+func WithUseImageHostname() CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+
+		ctr.config.UseImageHostname = true
+
+		return nil
+	}
+}
+
 // WithUseImageHosts tells the container not to bind-mount /etc/hosts in.
 // This conflicts with WithHosts().
 func WithUseImageHosts() CtrCreateOption {
@@ -1504,6 +1526,19 @@ func WithImageVolumes(volumes []*ContainerImageVolume) CtrCreateOption {
 	}
 }
 
+// WithImageVolumes adds the given image volumes to the container.
+func WithArtifactVolumes(volumes []*ContainerArtifactVolume) CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+
+		ctr.config.ArtifactVolumes = volumes
+
+		return nil
+	}
+}
+
 // WithHealthCheck adds the healthcheck to the container config
 func WithHealthCheck(healthCheck *manifest.Schema2HealthConfig) CtrCreateOption {
 	return func(ctr *Container) error {
@@ -1521,25 +1556,11 @@ func WithHealthCheckLogDestination(destination string) CtrCreateOption {
 		if ctr.valid {
 			return define.ErrCtrFinalized
 		}
-		switch destination {
-		case define.HealthCheckEventsLoggerDestination, define.DefaultHealthCheckLocalDestination:
-			ctr.config.HealthLogDestination = destination
-		default:
-			fileInfo, err := os.Stat(destination)
-			if err != nil {
-				return fmt.Errorf("HealthCheck Log '%s' destination error: %w", destination, err)
-			}
-			mode := fileInfo.Mode()
-			if !mode.IsDir() {
-				return fmt.Errorf("HealthCheck Log '%s' destination must be directory", destination)
-			}
-
-			absPath, err := filepath.Abs(destination)
-			if err != nil {
-				return err
-			}
-			ctr.config.HealthLogDestination = absPath
+		dest, err := define.GetValidHealthCheckDestination(destination)
+		if err != nil {
+			return err
 		}
+		ctr.config.HealthLogDestination = &dest
 		return nil
 	}
 }
@@ -1550,7 +1571,7 @@ func WithHealthCheckMaxLogCount(maxLogCount uint) CtrCreateOption {
 		if ctr.valid {
 			return define.ErrCtrFinalized
 		}
-		ctr.config.HealthMaxLogCount = maxLogCount
+		ctr.config.HealthMaxLogCount = &maxLogCount
 		return nil
 	}
 }
@@ -1561,7 +1582,7 @@ func WithHealthCheckMaxLogSize(maxLogSize uint) CtrCreateOption {
 		if ctr.valid {
 			return define.ErrCtrFinalized
 		}
-		ctr.config.HealthMaxLogSize = maxLogSize
+		ctr.config.HealthMaxLogSize = &maxLogSize
 		return nil
 	}
 }
@@ -1622,6 +1643,20 @@ func withIsInfra() CtrCreateOption {
 		}
 
 		ctr.config.IsInfra = true
+
+		return nil
+	}
+}
+
+// withIsDefaultInfra allows us to differentiate between the default infra containers generated
+// directly by podman and custom infra containers within the container config
+func withIsDefaultInfra() CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+
+		ctr.config.IsDefaultInfra = true
 
 		return nil
 	}

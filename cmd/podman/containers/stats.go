@@ -6,7 +6,6 @@ import (
 	"os"
 	"strconv"
 
-	tm "github.com/buger/goterm"
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/report"
 	"github.com/containers/podman/v5/cmd/podman/common"
@@ -152,9 +151,7 @@ func outputStats(cmd *cobra.Command, reports []define.ContainerStats) error {
 		"PIDS":          "PIDS",
 	})
 	if !statsOptions.NoReset {
-		tm.Clear()
-		tm.MoveCursor(1, 1)
-		tm.Flush()
+		common.ClearScreen()
 	}
 	stats := make([]containerStats, 0, len(reports))
 	for _, r := range reports {
@@ -255,10 +252,10 @@ func combineBytesValues(a, b uint64) string {
 
 func outputJSON(stats []containerStats) error {
 	type jstat struct {
-		Id         string `json:"id"` //nolint:revive,stylecheck
+		Id         string `json:"id"`
 		Name       string `json:"name"`
 		CPUTime    string `json:"cpu_time"`
-		CpuPercent string `json:"cpu_percent"` //nolint:revive,stylecheck
+		CpuPercent string `json:"cpu_percent"`
 		AverageCPU string `json:"avg_cpu"`
 		MemUsage   string `json:"mem_usage"`
 		MemPerc    string `json:"mem_percent"`

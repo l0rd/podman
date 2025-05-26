@@ -21,7 +21,9 @@ import (
 var _ = Describe("Verify podman containers.conf usage", func() {
 
 	BeforeEach(func() {
-		os.Setenv("CONTAINERS_CONF", "config/containers.conf")
+		confPath, err := filepath.Abs("config/containers.conf")
+		Expect(err).ToNot(HaveOccurred())
+		os.Setenv("CONTAINERS_CONF", confPath)
 		if IsRemote() {
 			podmanTest.RestartRemoteService()
 		}
@@ -463,6 +465,79 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		Expect(session.OutputToString()).To(ContainSubstring("test"))
 	})
 
+	Describe("base_hosts_file in containers.conf", func() {
+		var baseHostsFile string
+		var session *PodmanSessionIntegration
+
+		JustBeforeEach(func() {
+			conffile := filepath.Join(podmanTest.TempDir, "containers.conf")
+			err = os.WriteFile(conffile, []byte(fmt.Sprintf("[containers]\nbase_hosts_file=\"%s\"\nno_hosts=false\n", baseHostsFile)), 0755)
+			Expect(err).ToNot(HaveOccurred())
+			os.Setenv("CONTAINERS_CONF_OVERRIDE", conffile)
+			if IsRemote() {
+				podmanTest.RestartRemoteService()
+			}
+
+			dockerfile := strings.Join([]string{
+				`FROM quay.io/libpod/alpine:latest`,
+				`RUN echo '56.78.12.34 image.example.com' > /etc/hosts`,
+			}, "\n")
+			podmanTest.BuildImage(dockerfile, "foobar.com/hosts_test:latest", "false", "--no-hosts")
+
+			session = podmanTest.Podman([]string{"run", "--name", "hosts_test", "--hostname", "hosts_test.dev", "--rm", "foobar.com/hosts_test:latest", "cat", "/etc/hosts"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(ExitCleanly())
+		})
+
+		Describe("base_hosts_file=path", func() {
+			BeforeEach(func() {
+				hostsPath := filepath.Join(podmanTest.TempDir, "hosts")
+				err := os.WriteFile(hostsPath, []byte("12.34.56.78 file.example.com"), 0755)
+				Expect(err).ToNot(HaveOccurred())
+				baseHostsFile = hostsPath
+			})
+
+			It("should use the hosts file from the file path", func() {
+				Expect(session.OutputToString()).ToNot(ContainSubstring("56.78.12.34 image.example.com"))
+				Expect(session.OutputToString()).To(ContainSubstring("12.34.56.78 file.example.com"))
+				Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 localhost"))
+				Expect(session.OutputToString()).To(ContainSubstring("::1 localhost"))
+				Expect(session.OutputToString()).To(ContainSubstring("host.containers.internal host.docker.internal"))
+				Expect(session.OutputToString()).To(ContainSubstring("hosts_test.dev hosts_test"))
+			})
+		})
+
+		Describe("base_hosts_file=image", func() {
+			BeforeEach(func() {
+				baseHostsFile = "image"
+			})
+
+			It("should use the hosts file from the container image", func() {
+				Expect(session.OutputToString()).To(ContainSubstring("56.78.12.34 image.example.com"))
+				Expect(session.OutputToString()).ToNot(ContainSubstring("12.34.56.78 file.example.com"))
+				Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 localhost"))
+				Expect(session.OutputToString()).To(ContainSubstring("::1 localhost"))
+				Expect(session.OutputToString()).To(ContainSubstring("host.containers.internal host.docker.internal"))
+				Expect(session.OutputToString()).To(ContainSubstring("hosts_test.dev hosts_test"))
+			})
+		})
+
+		Describe("base_hosts_file=none", func() {
+			BeforeEach(func() {
+				baseHostsFile = "none"
+			})
+
+			It("should not use any hosts files", func() {
+				Expect(session.OutputToString()).ToNot(ContainSubstring("56.78.12.34 image.example.com"))
+				Expect(session.OutputToString()).ToNot(ContainSubstring("12.34.56.78 file.example.com"))
+				Expect(session.OutputToString()).To(ContainSubstring("127.0.0.1 localhost"))
+				Expect(session.OutputToString()).To(ContainSubstring("::1 localhost"))
+				Expect(session.OutputToString()).To(ContainSubstring("host.containers.internal host.docker.internal"))
+				Expect(session.OutputToString()).To(ContainSubstring("hosts_test.dev hosts_test"))
+			})
+		})
+	})
+
 	It("seccomp profile path", func() {
 		configPath := filepath.Join(podmanTest.TempDir, "containers.conf")
 		os.Setenv("CONTAINERS_CONF", configPath)
@@ -687,5 +762,110 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 			Expect(inspect).Should(ExitCleanly())
 			Expect(inspect.OutputToString()).Should(Equal(mode))
 		}
+	})
+
+	startContainer := func(params ...string) string {
+		args := []string{"create"}
+		for _, param := range params {
+			if param == "--name" {
+				args = append(args, "--replace")
+				break
+			}
+		}
+		args = append(args, params...)
+		args = append(args, ALPINE, "true")
+
+		result := podmanTest.Podman(args)
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(ExitCleanly())
+		containerID := result.OutputToString()
+
+		return containerID
+	}
+
+	getContainerConfig := func(containerID string, formatParam string) string {
+		inspect := podmanTest.Podman([]string{"inspect", "--format", formatParam, containerID})
+		inspect.WaitWithDefaultTimeout()
+		value := inspect.OutputToString()
+		return value
+	}
+
+	It("podman containers.conf container_name_as_hostname", func() {
+
+		// With default containers.conf
+
+		// Start container with no options
+		containerID := startContainer()
+		hostname := getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should be the first 12 characters of the containerID
+		Expect(hostname).To(Equal(containerID[:12]))
+
+		// Start container with name
+		containerID = startContainer("--name", "cname1")
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should still be the first 12 characters of the containerID
+		Expect(hostname).To(Equal(containerID[:12]))
+
+		// Start container with just hostname
+		containerID = startContainer("--hostname", "cname1.dev")
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should now be "cname1.dev"
+		Expect(hostname).To(Equal("cname1.dev"))
+
+		// Start container with name and hostname
+		containerID = startContainer("--name", "cname1", "--hostname", "cname1.dev")
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should now be "cname1.dev"
+		Expect(hostname).To(Equal("cname1.dev"))
+
+		// Create containers.conf override with container_name_as_hostname=true
+		conffile := filepath.Join(podmanTest.TempDir, "container.conf")
+		err := os.WriteFile(conffile, []byte("[containers]\ncontainer_name_as_hostname=true\n"), 0755)
+		Expect(err).ToNot(HaveOccurred())
+		os.Setenv("CONTAINERS_CONF_OVERRIDE", conffile)
+		if IsRemote() {
+			podmanTest.RestartRemoteService()
+		}
+
+		// Start container with no options
+		containerID = startContainer()
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		name := getContainerConfig(containerID, "{{ .Name }}")
+		// Hostname should be the auto generated container name with '_' removed
+		Expect(hostname).To(Equal(strings.ReplaceAll(name, "_", "")))
+
+		// Start container with name
+		containerID = startContainer("--name", "cname1")
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should be the container name
+		Expect(hostname).To(Equal("cname1"))
+
+		// Start container with name containing '_'
+		containerID = startContainer("--name", "cname1_2_3")
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should be the set container name with all '_' removed
+		Expect(hostname).To(Equal("cname123"))
+
+		// Start container with just hostname
+		containerID = startContainer("--hostname", "cname1.dev")
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should now be "cname1.dev"
+		Expect(hostname).To(Equal("cname1.dev"))
+
+		// Start container with name and hostname
+		containerID = startContainer("--name", "cname1", "--hostname", "cname1.dev")
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		// Hostname should still be "cname1.dev"
+		Expect(hostname).To(Equal("cname1.dev"))
+
+		// Start container with name = 260 characters
+		longHostname := "cnabcdefghijklmnopqrstuvwxyz1234567890.abcdefghijklmnopqrstuvwxyz1234567890.abcdefghijklmnopqrstuvwxyz1234567890.abcdefghijklmnopqrstuvwxyz1234567890.abcdefghijklmnopqrstuvwxyz1234567890.abcdefghijklmnopqrstuvwxyz1234567890.abcdefghijklmnopqrstuvwxyz1234567890"
+		containerID = startContainer("--name", longHostname)
+		hostname = getContainerConfig(containerID, "{{ .Config.Hostname }}")
+		name = getContainerConfig(containerID, "{{ .Name }}")
+		// Double check that name actually got set correctly
+		Expect(name).To(Equal(longHostname))
+		// Hostname should be the container name truncated to 253 characters
+		Expect(hostname).To(Equal(name[:253]))
 	})
 })

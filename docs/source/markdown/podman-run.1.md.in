@@ -233,6 +233,8 @@ Print usage statement
 
 @@option hostname.container
 
+@@option hosts-file
+
 @@option hostuser
 
 @@option http-proxy
@@ -284,6 +286,8 @@ If used together with **--pod**, the container joins the pod's network namespace
 @@option network-alias
 
 @@option no-healthcheck
+
+@@option no-hostname
 
 @@option no-hosts
 
@@ -619,7 +623,7 @@ $ podman run -v data:/data2 -i -t fedora bash
 $ podman run -v /var/cache/dnf:/var/cache/dnf:O -ti fedora dnf -y update
 ```
 
-If the container needs a writeable mounted volume by a non root user inside the container, use the **U** option. This option tells Podman to chown the source volume to match the default UID and GID used within the container.
+If the container needs a writable mounted volume by a non root user inside the container, use the **U** option. This option tells Podman to chown the source volume to match the default UID and GID used within the container.
 ```
 $ podman run -d -e MARIADB_ROOT_PASSWORD=root --user mysql --userns=keep-id -v ~/data:/var/lib/mysql:Z,U mariadb
 ```

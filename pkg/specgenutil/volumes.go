@@ -22,63 +22,85 @@ var (
 	errNoDest    = errors.New("must set volume destination")
 )
 
+type containerMountSlice struct {
+	mounts          []spec.Mount
+	volumes         []*specgen.NamedVolume
+	overlayVolumes  []*specgen.OverlayVolume
+	imageVolumes    []*specgen.ImageVolume
+	artifactVolumes []*specgen.ArtifactVolume
+}
+
+// containerMountMap contains the container mounts with the destination path as map key
+type containerMountMap struct {
+	mounts          map[string]spec.Mount
+	volumes         map[string]*specgen.NamedVolume
+	imageVolumes    map[string]*specgen.ImageVolume
+	artifactVolumes map[string]*specgen.ArtifactVolume
+}
+
+type universalMount struct {
+	mount spec.Mount
+	// Used only with Named Volume type mounts
+	subPath string
+}
+
 // Parse all volume-related options in the create config into a set of mounts
 // and named volumes to add to the container.
 // Handles --volumes, --mount, and --tmpfs flags.
 // Does not handle image volumes, init, and --volumes-from flags.
 // Can also add tmpfs mounts from read-only tmpfs.
 // TODO: handle options parsing/processing via containers/storage/pkg/mount
-func parseVolumes(rtc *config.Config, volumeFlag, mountFlag, tmpfsFlag []string) ([]spec.Mount, []*specgen.NamedVolume, []*specgen.OverlayVolume, []*specgen.ImageVolume, error) {
+func parseVolumes(rtc *config.Config, volumeFlag, mountFlag, tmpfsFlag []string) (*containerMountSlice, error) {
 	// Get mounts from the --mounts flag.
 	// TODO: The runtime config part of this needs to move into pkg/specgen/generate to avoid querying containers.conf on the client.
-	unifiedMounts, unifiedVolumes, unifiedImageVolumes, err := Mounts(mountFlag, rtc.Mounts())
+	unifiedContainerMounts, err := mounts(mountFlag, rtc.Mounts())
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 
 	// Next --volumes flag.
 	volumeMounts, volumeVolumes, overlayVolumes, err := specgen.GenVolumeMounts(volumeFlag)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 
 	// Next --tmpfs flag.
 	tmpfsMounts, err := getTmpfsMounts(tmpfsFlag)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 
 	// Unify mounts from --mount, --volume, --tmpfs.
 	// Start with --volume.
 	for dest, mount := range volumeMounts {
-		if vol, ok := unifiedMounts[dest]; ok {
+		if vol, ok := unifiedContainerMounts.mounts[dest]; ok {
 			if mount.Source == vol.Source &&
 				specgen.StringSlicesEqual(vol.Options, mount.Options) {
 				continue
 			}
-			return nil, nil, nil, nil, fmt.Errorf("%v: %w", dest, specgen.ErrDuplicateDest)
+			return nil, fmt.Errorf("%v: %w", dest, specgen.ErrDuplicateDest)
 		}
-		unifiedMounts[dest] = mount
+		unifiedContainerMounts.mounts[dest] = mount
 	}
 	for dest, volume := range volumeVolumes {
-		if vol, ok := unifiedVolumes[dest]; ok {
+		if vol, ok := unifiedContainerMounts.volumes[dest]; ok {
 			if volume.Name == vol.Name &&
 				specgen.StringSlicesEqual(vol.Options, volume.Options) {
 				continue
 			}
-			return nil, nil, nil, nil, fmt.Errorf("%v: %w", dest, specgen.ErrDuplicateDest)
+			return nil, fmt.Errorf("%v: %w", dest, specgen.ErrDuplicateDest)
 		}
-		unifiedVolumes[dest] = volume
+		unifiedContainerMounts.volumes[dest] = volume
 	}
 	// Now --tmpfs
 	for dest, tmpfs := range tmpfsMounts {
-		if vol, ok := unifiedMounts[dest]; ok {
+		if vol, ok := unifiedContainerMounts.mounts[dest]; ok {
 			if vol.Type != define.TypeTmpfs {
-				return nil, nil, nil, nil, fmt.Errorf("%v: %w", dest, specgen.ErrDuplicateDest)
+				return nil, fmt.Errorf("%v: %w", dest, specgen.ErrDuplicateDest)
 			}
 			continue
 		}
-		unifiedMounts[dest] = tmpfs
+		unifiedContainerMounts.mounts[dest] = tmpfs
 	}
 
 	// Check for conflicts between named volumes, overlay & image volumes,
@@ -91,64 +113,81 @@ func parseVolumes(rtc *config.Config, volumeFlag, mountFlag, tmpfsFlag []string)
 		allMounts[dest] = true
 		return nil
 	}
-	for dest := range unifiedMounts {
+	for dest := range unifiedContainerMounts.mounts {
 		if err := testAndSet(dest); err != nil {
-			return nil, nil, nil, nil, err
+			return nil, err
 		}
 	}
-	for dest := range unifiedVolumes {
+	for dest := range unifiedContainerMounts.volumes {
 		if err := testAndSet(dest); err != nil {
-			return nil, nil, nil, nil, err
+			return nil, err
 		}
 	}
 	for dest := range overlayVolumes {
 		if err := testAndSet(dest); err != nil {
-			return nil, nil, nil, nil, err
+			return nil, err
 		}
 	}
-	for dest := range unifiedImageVolumes {
+	for dest := range unifiedContainerMounts.imageVolumes {
 		if err := testAndSet(dest); err != nil {
-			return nil, nil, nil, nil, err
+			return nil, err
+		}
+	}
+	for dest := range unifiedContainerMounts.artifactVolumes {
+		if err := testAndSet(dest); err != nil {
+			return nil, err
 		}
 	}
 
 	// Final step: maps to arrays
-	finalMounts := make([]spec.Mount, 0, len(unifiedMounts))
-	for _, mount := range unifiedMounts {
+	finalMounts := make([]spec.Mount, 0, len(unifiedContainerMounts.mounts))
+	for _, mount := range unifiedContainerMounts.mounts {
 		if mount.Type == define.TypeBind {
 			absSrc, err := specgen.ConvertWinMountPath(mount.Source)
 			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("getting absolute path of %s: %w", mount.Source, err)
+				return nil, fmt.Errorf("getting absolute path of %s: %w", mount.Source, err)
 			}
 			mount.Source = absSrc
 		}
 		finalMounts = append(finalMounts, mount)
 	}
-	finalVolumes := make([]*specgen.NamedVolume, 0, len(unifiedVolumes))
-	for _, volume := range unifiedVolumes {
+	finalVolumes := make([]*specgen.NamedVolume, 0, len(unifiedContainerMounts.volumes))
+	for _, volume := range unifiedContainerMounts.volumes {
 		finalVolumes = append(finalVolumes, volume)
 	}
-	finalOverlayVolume := make([]*specgen.OverlayVolume, 0)
+	finalOverlayVolume := make([]*specgen.OverlayVolume, 0, len(overlayVolumes))
 	for _, volume := range overlayVolumes {
 		finalOverlayVolume = append(finalOverlayVolume, volume)
 	}
-	finalImageVolumes := make([]*specgen.ImageVolume, 0, len(unifiedImageVolumes))
-	for _, volume := range unifiedImageVolumes {
+	finalImageVolumes := make([]*specgen.ImageVolume, 0, len(unifiedContainerMounts.imageVolumes))
+	for _, volume := range unifiedContainerMounts.imageVolumes {
 		finalImageVolumes = append(finalImageVolumes, volume)
 	}
+	finalArtifactVolumes := make([]*specgen.ArtifactVolume, 0, len(unifiedContainerMounts.artifactVolumes))
+	for _, volume := range unifiedContainerMounts.artifactVolumes {
+		finalArtifactVolumes = append(finalArtifactVolumes, volume)
+	}
 
-	return finalMounts, finalVolumes, finalOverlayVolume, finalImageVolumes, nil
+	return &containerMountSlice{
+		mounts:          finalMounts,
+		volumes:         finalVolumes,
+		overlayVolumes:  finalOverlayVolume,
+		imageVolumes:    finalImageVolumes,
+		artifactVolumes: finalArtifactVolumes,
+	}, nil
 }
 
-// Mounts takes user-provided input from the --mount flag as well as Mounts
+// mounts takes user-provided input from the --mount flag as well as mounts
 // specified in containers.conf and creates OCI spec mounts and Libpod named volumes.
 // podman run --mount type=bind,src=/etc/resolv.conf,target=/etc/resolv.conf ...
 // podman run --mount type=tmpfs,target=/dev/shm ...
 // podman run --mount type=volume,source=test-volume, ...
-func Mounts(mountFlag []string, configMounts []string) (map[string]spec.Mount, map[string]*specgen.NamedVolume, map[string]*specgen.ImageVolume, error) {
+// podman run --mount type=artifact,source=$artifact,dest=...
+func mounts(mountFlag []string, configMounts []string) (*containerMountMap, error) {
 	finalMounts := make(map[string]spec.Mount)
 	finalNamedVolumes := make(map[string]*specgen.NamedVolume)
 	finalImageVolumes := make(map[string]*specgen.ImageVolume)
+	finalArtifactVolumes := make(map[string]*specgen.ArtifactVolume)
 	parseMounts := func(mounts []string, ignoreDup bool) error {
 		for _, mount := range mounts {
 			// TODO: Docker defaults to "volume" if no mount type is specified.
@@ -219,6 +258,18 @@ func Mounts(mountFlag []string, configMounts []string) (map[string]spec.Mount, m
 					return fmt.Errorf("%v: %w", volume.Destination, specgen.ErrDuplicateDest)
 				}
 				finalImageVolumes[volume.Destination] = volume
+			case "artifact":
+				volume, err := getArtifactVolume(tokens)
+				if err != nil {
+					return err
+				}
+				if _, ok := finalArtifactVolumes[volume.Destination]; ok {
+					if ignoreDup {
+						continue
+					}
+					return fmt.Errorf("%v: %w", volume.Destination, specgen.ErrDuplicateDest)
+				}
+				finalArtifactVolumes[volume.Destination] = volume
 			case "volume":
 				volume, err := getNamedVolume(tokens)
 				if err != nil {
@@ -240,23 +291,28 @@ func Mounts(mountFlag []string, configMounts []string) (map[string]spec.Mount, m
 
 	// Parse mounts passed in from the user
 	if err := parseMounts(mountFlag, false); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// If user specified a mount flag that conflicts with a containers.conf flag, then ignore
 	// the duplicate. This means that the parsing of the containers.conf configMounts should always
 	// happen second.
 	if err := parseMounts(configMounts, true); err != nil {
-		return nil, nil, nil, fmt.Errorf("parsing containers.conf mounts: %w", err)
+		return nil, fmt.Errorf("parsing containers.conf mounts: %w", err)
 	}
 
-	return finalMounts, finalNamedVolumes, finalImageVolumes, nil
+	return &containerMountMap{
+		mounts:          finalMounts,
+		volumes:         finalNamedVolumes,
+		imageVolumes:    finalImageVolumes,
+		artifactVolumes: finalArtifactVolumes,
+	}, nil
 }
 
-func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
+func parseMountOptions(mountType string, args []string) (*universalMount, error) {
 	var setTmpcopyup, setRORW, setSuid, setDev, setExec, setRelabel, setOwnership, setSwap bool
 
-	mnt := spec.Mount{}
+	mnt := new(universalMount)
 	for _, arg := range args {
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch name {
@@ -264,7 +320,7 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			if mountType != define.TypeBind {
 				return nil, fmt.Errorf("%q option not supported for %q mount types", name, mountType)
 			}
-			mnt.Options = append(mnt.Options, define.TypeBind)
+			mnt.mount.Options = append(mnt.mount.Options, define.TypeBind)
 		case "bind-propagation":
 			if mountType != define.TypeBind {
 				return nil, fmt.Errorf("%q option not supported for %q mount types", name, mountType)
@@ -278,16 +334,16 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			default:
 				return nil, fmt.Errorf("invalid value %q", arg)
 			}
-			mnt.Options = append(mnt.Options, value)
+			mnt.mount.Options = append(mnt.mount.Options, value)
 		case "consistency":
 			// Often used on MACs and mistakenly on Linux platforms.
 			// Since Docker ignores this option so shall we.
 			continue
 		case "idmap":
 			if hasValue {
-				mnt.Options = append(mnt.Options, fmt.Sprintf("idmap=%s", value))
+				mnt.mount.Options = append(mnt.mount.Options, fmt.Sprintf("idmap=%s", value))
 			} else {
-				mnt.Options = append(mnt.Options, "idmap")
+				mnt.mount.Options = append(mnt.mount.Options, "idmap")
 			}
 		case "readonly", "ro", "rw":
 			if setRORW {
@@ -307,35 +363,35 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			if hasValue {
 				switch strings.ToLower(value) {
 				case "true":
-					mnt.Options = append(mnt.Options, name)
+					mnt.mount.Options = append(mnt.mount.Options, name)
 				case "false":
 					// Set the opposite only for rw
 					// ro's opposite is the default
 					if name == "rw" {
-						mnt.Options = append(mnt.Options, "ro")
+						mnt.mount.Options = append(mnt.mount.Options, "ro")
 					}
 				}
 			} else {
-				mnt.Options = append(mnt.Options, name)
+				mnt.mount.Options = append(mnt.mount.Options, name)
 			}
 		case "nodev", "dev":
 			if setDev {
 				return nil, fmt.Errorf("cannot pass 'nodev' and 'dev' mnt.Options more than once: %w", errOptionArg)
 			}
 			setDev = true
-			mnt.Options = append(mnt.Options, name)
+			mnt.mount.Options = append(mnt.mount.Options, name)
 		case "noexec", "exec":
 			if setExec {
 				return nil, fmt.Errorf("cannot pass 'noexec' and 'exec' mnt.Options more than once: %w", errOptionArg)
 			}
 			setExec = true
-			mnt.Options = append(mnt.Options, name)
+			mnt.mount.Options = append(mnt.mount.Options, name)
 		case "nosuid", "suid":
 			if setSuid {
 				return nil, fmt.Errorf("cannot pass 'nosuid' and 'suid' mnt.Options more than once: %w", errOptionArg)
 			}
 			setSuid = true
-			mnt.Options = append(mnt.Options, name)
+			mnt.mount.Options = append(mnt.mount.Options, name)
 		case "noswap":
 			if setSwap {
 				return nil, fmt.Errorf("cannot pass 'noswap' mnt.Options more than once: %w", errOptionArg)
@@ -344,7 +400,7 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 				return nil, fmt.Errorf("the 'noswap' option is only allowed with rootful tmpfs mounts: %w", errOptionArg)
 			}
 			setSwap = true
-			mnt.Options = append(mnt.Options, name)
+			mnt.mount.Options = append(mnt.mount.Options, name)
 		case "relabel":
 			if setRelabel {
 				return nil, fmt.Errorf("cannot pass 'relabel' option more than once: %w", errOptionArg)
@@ -355,19 +411,19 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			}
 			switch value {
 			case "private":
-				mnt.Options = append(mnt.Options, "Z")
+				mnt.mount.Options = append(mnt.mount.Options, "Z")
 			case "shared":
-				mnt.Options = append(mnt.Options, "z")
+				mnt.mount.Options = append(mnt.mount.Options, "z")
 			default:
 				return nil, fmt.Errorf("%s mount option must be 'private' or 'shared': %w", name, util.ErrBadMntOption)
 			}
 		case "shared", "rshared", "private", "rprivate", "slave", "rslave", "unbindable", "runbindable", "Z", "z", "no-dereference":
-			mnt.Options = append(mnt.Options, name)
+			mnt.mount.Options = append(mnt.mount.Options, name)
 		case "src", "source":
 			if mountType == define.TypeTmpfs {
 				return nil, fmt.Errorf("%q option not supported for %q mount types", name, mountType)
 			}
-			if mnt.Source != "" {
+			if mnt.mount.Source != "" {
 				return nil, fmt.Errorf("cannot pass %q option more than once: %w", name, errOptionArg)
 			}
 			if !hasValue {
@@ -376,9 +432,17 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			if len(value) == 0 {
 				return nil, fmt.Errorf("host directory cannot be empty: %w", errOptionArg)
 			}
-			mnt.Source = value
+			mnt.mount.Source = value
+		case "subpath", "volume-subpath":
+			if mountType != define.TypeVolume {
+				return nil, fmt.Errorf("cannot set option %q on non-volume mounts", name)
+			}
+			if !hasValue {
+				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
+			}
+			mnt.subPath = value
 		case "target", "dst", "destination":
-			if mnt.Destination != "" {
+			if mnt.mount.Destination != "" {
 				return nil, fmt.Errorf("cannot pass %q option more than once: %w", name, errOptionArg)
 			}
 			if !hasValue {
@@ -387,7 +451,7 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			if err := parse.ValidateVolumeCtrDir(value); err != nil {
 				return nil, err
 			}
-			mnt.Destination = unixPathClean(value)
+			mnt.mount.Destination = unixPathClean(value)
 		case "tmpcopyup", "notmpcopyup":
 			if mountType != define.TypeTmpfs {
 				return nil, fmt.Errorf("%q option not supported for %q mount types", name, mountType)
@@ -396,7 +460,7 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 				return nil, fmt.Errorf("cannot pass 'tmpcopyup' and 'notmpcopyup' mnt.Options more than once: %w", errOptionArg)
 			}
 			setTmpcopyup = true
-			mnt.Options = append(mnt.Options, name)
+			mnt.mount.Options = append(mnt.mount.Options, name)
 		case "tmpfs-mode":
 			if mountType != define.TypeTmpfs {
 				return nil, fmt.Errorf("%q option not supported for %q mount types", name, mountType)
@@ -404,7 +468,7 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			if !hasValue {
 				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
 			}
-			mnt.Options = append(mnt.Options, fmt.Sprintf("mode=%s", value))
+			mnt.mount.Options = append(mnt.mount.Options, fmt.Sprintf("mode=%s", value))
 		case "tmpfs-size":
 			if mountType != define.TypeTmpfs {
 				return nil, fmt.Errorf("%q option not supported for %q mount types", name, mountType)
@@ -412,7 +476,7 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			if !hasValue {
 				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
 			}
-			mnt.Options = append(mnt.Options, fmt.Sprintf("size=%s", value))
+			mnt.mount.Options = append(mnt.mount.Options, fmt.Sprintf("size=%s", value))
 		case "U", "chown":
 			if setOwnership {
 				return nil, fmt.Errorf("cannot pass 'U' or 'chown' option more than once: %w", errOptionArg)
@@ -422,7 +486,7 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 				return nil, err
 			}
 			if ok {
-				mnt.Options = append(mnt.Options, "U")
+				mnt.mount.Options = append(mnt.mount.Options, "U")
 			}
 			setOwnership = true
 		case "volume-label":
@@ -434,25 +498,26 @@ func parseMountOptions(mountType string, args []string) (*spec.Mount, error) {
 			if mountType != define.TypeVolume {
 				return nil, fmt.Errorf("%q option not supported for %q mount types", name, mountType)
 			}
-			mnt.Options = append(mnt.Options, arg)
+			mnt.mount.Options = append(mnt.mount.Options, arg)
 		default:
 			return nil, fmt.Errorf("%s: %w", name, util.ErrBadMntOption)
 		}
 	}
-	if mountType != "glob" && len(mnt.Destination) == 0 {
+	if mountType != "glob" && len(mnt.mount.Destination) == 0 {
 		return nil, errNoDest
 	}
-	return &mnt, nil
+	return mnt, nil
 }
 
 // Parse glob mounts entry from the --mount flag.
 func getGlobMounts(args []string) ([]spec.Mount, error) {
 	mounts := []spec.Mount{}
 
-	mnt, err := parseMountOptions("glob", args)
+	uMnt, err := parseMountOptions("glob", args)
 	if err != nil {
 		return nil, err
 	}
+	mnt := uMnt.mount
 
 	globs, err := filepath.Glob(mnt.Source)
 	if err != nil {
@@ -488,10 +553,11 @@ func getBindMount(args []string) (spec.Mount, error) {
 		Type: define.TypeBind,
 	}
 	var err error
-	mnt, err := parseMountOptions(newMount.Type, args)
+	uMnt, err := parseMountOptions(newMount.Type, args)
 	if err != nil {
 		return newMount, err
 	}
+	mnt := uMnt.mount
 
 	if len(mnt.Destination) == 0 {
 		return newMount, errNoDest
@@ -519,10 +585,11 @@ func parseMemoryMount(args []string, mountType string) (spec.Mount, error) {
 	}
 
 	var err error
-	mnt, err := parseMountOptions(newMount.Type, args)
+	uMnt, err := parseMountOptions(newMount.Type, args)
 	if err != nil {
 		return newMount, err
 	}
+	mnt := uMnt.mount
 	if len(mnt.Destination) == 0 {
 		return newMount, errNoDest
 	}
@@ -543,7 +610,7 @@ func getDevptsMount(args []string) (spec.Mount, error) {
 	for _, arg := range args {
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch name {
-		case "uid", "gid", "mode", "ptxmode", "newinstance", "max":
+		case "uid", "gid", "mode", "ptmxmode", "newinstance", "max":
 			newMount.Options = append(newMount.Options, arg)
 		case "target", "dst", "destination":
 			if !hasValue {
@@ -576,12 +643,14 @@ func getNamedVolume(args []string) (*specgen.NamedVolume, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(mnt.Destination) == 0 {
+	if len(mnt.mount.Destination) == 0 {
 		return nil, errNoDest
 	}
-	newVolume.Options = mnt.Options
-	newVolume.Name = mnt.Source
-	newVolume.Dest = mnt.Destination
+
+	newVolume.Options = mnt.mount.Options
+	newVolume.SubPath = mnt.subPath
+	newVolume.Name = mnt.mount.Source
+	newVolume.Dest = mnt.mount.Destination
 	return newVolume, nil
 }
 
@@ -636,6 +705,50 @@ func getImageVolume(args []string) (*specgen.ImageVolume, error) {
 
 	if len(newVolume.Source)*len(newVolume.Destination) == 0 {
 		return nil, errors.New("must set source and destination for image volume")
+	}
+
+	return newVolume, nil
+}
+
+// Parse the arguments into an artifact volume. An artifact volume creates mounts
+// based on an existing artifact in the store.
+func getArtifactVolume(args []string) (*specgen.ArtifactVolume, error) {
+	newVolume := new(specgen.ArtifactVolume)
+
+	for _, arg := range args {
+		name, value, hasValue := strings.Cut(arg, "=")
+		switch name {
+		case "src", "source":
+			if !hasValue {
+				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
+			}
+			newVolume.Source = value
+		case "target", "dst", "destination":
+			if !hasValue {
+				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
+			}
+			if err := parse.ValidateVolumeCtrDir(value); err != nil {
+				return nil, err
+			}
+			newVolume.Destination = unixPathClean(value)
+		case "title":
+			if !hasValue {
+				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
+			}
+			newVolume.Title = value
+
+		case "digest":
+			if !hasValue {
+				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
+			}
+			newVolume.Digest = value
+		default:
+			return nil, fmt.Errorf("%s: %w", name, util.ErrBadMntOption)
+		}
+	}
+
+	if len(newVolume.Source)*len(newVolume.Destination) == 0 {
+		return nil, errors.New("must set source and destination for artifact volume")
 	}
 
 	return newVolume, nil

@@ -92,7 +92,6 @@ func logsFlags(cmd *cobra.Command) {
 	flags.BoolVarP(&logsPodOptions.Timestamps, "timestamps", "t", false, "Output the timestamps in the log")
 	flags.BoolVarP(&logsPodOptions.Colors, "color", "", false, "Output the containers within a pod with different colors in the log")
 
-	flags.SetInterspersed(false)
 	_ = flags.MarkHidden("details")
 }
 
@@ -126,5 +125,5 @@ func logs(_ *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		podName = args[0]
 	}
-	return registry.ContainerEngine().PodLogs(registry.GetContext(), podName, logsPodOptions.PodLogsOptions)
+	return registry.ContainerEngine().PodLogs(registry.Context(), podName, logsPodOptions.PodLogsOptions)
 }

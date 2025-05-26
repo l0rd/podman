@@ -2,7 +2,6 @@ package storage
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -94,7 +93,7 @@ type Image struct {
 	// ReadOnly is true if this image resides in a read-only layer store.
 	ReadOnly bool `json:"-"`
 
-	Flags map[string]interface{} `json:"flags,omitempty"`
+	Flags map[string]any `json:"flags,omitempty"`
 }
 
 // roImageStore provides bookkeeping for information about Images.
@@ -183,18 +182,18 @@ func copyImage(i *Image) *Image {
 	return &Image{
 		ID:              i.ID,
 		Digest:          i.Digest,
-		Digests:         copyDigestSlice(i.Digests),
-		Names:           copyStringSlice(i.Names),
-		NamesHistory:    copyStringSlice(i.NamesHistory),
+		Digests:         copySlicePreferringNil(i.Digests),
+		Names:           copySlicePreferringNil(i.Names),
+		NamesHistory:    copySlicePreferringNil(i.NamesHistory),
 		TopLayer:        i.TopLayer,
-		MappedTopLayers: copyStringSlice(i.MappedTopLayers),
+		MappedTopLayers: copySlicePreferringNil(i.MappedTopLayers),
 		Metadata:        i.Metadata,
-		BigDataNames:    copyStringSlice(i.BigDataNames),
-		BigDataSizes:    maps.Clone(i.BigDataSizes),
-		BigDataDigests:  maps.Clone(i.BigDataDigests),
+		BigDataNames:    copySlicePreferringNil(i.BigDataNames),
+		BigDataSizes:    copyMapPreferringNil(i.BigDataSizes),
+		BigDataDigests:  copyMapPreferringNil(i.BigDataDigests),
 		Created:         i.Created,
 		ReadOnly:        i.ReadOnly,
-		Flags:           maps.Clone(i.Flags),
+		Flags:           copyMapPreferringNil(i.Flags),
 	}
 }
 
@@ -676,7 +675,7 @@ func (r *imageStore) ClearFlag(id string, flag string) error {
 }
 
 // Requires startWriting.
-func (r *imageStore) SetFlag(id string, flag string, value interface{}) error {
+func (r *imageStore) SetFlag(id string, flag string, value any) error {
 	if !r.lockfile.IsReadWrite() {
 		return fmt.Errorf("not allowed to set flags on images at %q: %w", r.imagespath(), ErrStoreIsReadOnly)
 	}
@@ -685,7 +684,7 @@ func (r *imageStore) SetFlag(id string, flag string, value interface{}) error {
 		return fmt.Errorf("locating image with ID %q: %w", id, ErrImageUnknown)
 	}
 	if image.Flags == nil {
-		image.Flags = make(map[string]interface{})
+		image.Flags = make(map[string]any)
 	}
 	image.Flags[flag] = value
 	return r.Save()
@@ -718,14 +717,14 @@ func (r *imageStore) create(id string, names []string, layer string, options Ima
 		Digest:         options.Digest,
 		Digests:        dedupeDigests(options.Digests),
 		Names:          names,
-		NamesHistory:   copyStringSlice(options.NamesHistory),
+		NamesHistory:   copySlicePreferringNil(options.NamesHistory),
 		TopLayer:       layer,
 		Metadata:       options.Metadata,
 		BigDataNames:   []string{},
 		BigDataSizes:   make(map[string]int64),
 		BigDataDigests: make(map[string]digest.Digest),
 		Created:        options.CreationDate,
-		Flags:          copyStringInterfaceMap(options.Flags),
+		Flags:          newMapFrom(options.Flags),
 	}
 	if image.Created.IsZero() {
 		image.Created = time.Now().UTC()
@@ -967,7 +966,7 @@ func (r *imageStore) BigDataNames(id string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("locating image with ID %q: %w", id, ErrImageUnknown)
 	}
-	return copyStringSlice(image.BigDataNames), nil
+	return copySlicePreferringNil(image.BigDataNames), nil
 }
 
 // Requires startWriting.

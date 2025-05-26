@@ -161,6 +161,9 @@ func create(cmd *cobra.Command, args []string) error {
 	}
 	s.RawImageName = rawImageName
 
+	// Include the command used to create the container.
+	s.ContainerCreateCommand = os.Args
+
 	if err := createPodIfNecessary(cmd, s, cliVals.Net); err != nil {
 		return err
 	}
@@ -171,7 +174,14 @@ func create(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	report, err := registry.ContainerEngine().ContainerCreate(registry.GetContext(), s)
+	if s.HealthConfig == nil {
+		s.HealthConfig, err = common.GetHealthCheckOverrideConfig(cmd, &cliVals)
+		if err != nil {
+			return err
+		}
+	}
+
+	report, err := registry.ContainerEngine().ContainerCreate(registry.Context(), s)
 	if err != nil {
 		// if pod was created as part of run
 		// remove it in case ctr creation fails
@@ -209,10 +219,6 @@ func replaceContainer(name string) error {
 func createOrUpdateFlags(cmd *cobra.Command, vals *entities.ContainerCreateOptions) error {
 	if cmd.Flags().Changed("pids-limit") {
 		val := cmd.Flag("pids-limit").Value.String()
-		// Convert -1 to 0, so that -1 maps to unlimited pids limit
-		if val == "-1" {
-			val = "0"
-		}
 		pidsLimit, err := strconv.ParseInt(val, 10, 32)
 		if err != nil {
 			return err
@@ -323,6 +329,9 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 	if noHosts && c.Flag("add-host").Changed {
 		return vals, errors.New("--no-hosts and --add-host cannot be set together")
 	}
+	if noHosts && c.Flag("hosts-file").Changed {
+		return vals, errors.New("--no-hosts and --hosts-file cannot be set together")
+	}
 
 	if !isInfra && c.Flag("entrypoint").Changed {
 		val := c.Flag("entrypoint").Value.String()
@@ -395,7 +404,7 @@ func pullImage(cmd *cobra.Command, imageName string, cliVals *entities.Container
 		pullOptions.RetryDelay = val
 	}
 
-	pullReport, pullErr := registry.ImageEngine().Pull(registry.GetContext(), imageName, pullOptions)
+	pullReport, pullErr := registry.ImageEngine().Pull(registry.Context(), imageName, pullOptions)
 	if pullErr != nil {
 		return "", pullErr
 	}

@@ -98,6 +98,19 @@ var _ = SynchronizedAfterSuite(func() {}, func() {
 	}
 })
 
+// The config does not matter to much for our testing, however we
+// would like to be sure podman machine is not effected by certain
+// settings as we should be using full URLs anywhere.
+// https://github.com/containers/podman/issues/24567
+const sshConfigContent = `
+Host *
+  User NOT_REAL
+  Port 9999
+Host 127.0.0.1
+  User blah
+  IdentityFile ~/.ssh/id_ed25519
+`
+
 func setup() (string, *machineTestBuilder) {
 	// Set TMPDIR if this needs a new directory
 	if value, ok := os.LookupEnv("TMPDIR"); ok {
@@ -118,7 +131,7 @@ func setup() (string, *machineTestBuilder) {
 	if err != nil {
 		Fail(fmt.Sprintf("failed to create ssh config: %q", err))
 	}
-	if _, err := sshConfig.WriteString("IdentitiesOnly=yes"); err != nil {
+	if _, err := sshConfig.WriteString(sshConfigContent); err != nil {
 		Fail(fmt.Sprintf("failed to write ssh config: %q", err))
 	}
 	if err := sshConfig.Close(); err != nil {
@@ -140,6 +153,22 @@ func setup() (string, *machineTestBuilder) {
 	}
 	if err := os.Setenv("PODMAN_CONNECTIONS_CONF", filepath.Join(homeDir, "connections.json")); err != nil {
 		Fail("failed to set PODMAN_CONNECTIONS_CONF")
+	}
+	if err := os.Setenv("PODMAN_COMPOSE_WARNING_LOGS", "false"); err != nil {
+		Fail("failed to set PODMAN_COMPOSE_WARNING_LOGS")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		Fail("unable to get working directory")
+	}
+	var fakeComposeBin string
+	if runtime.GOOS != "windows" {
+		fakeComposeBin = "fake_compose"
+	} else {
+		fakeComposeBin = "fake_compose.bat"
+	}
+	if err := os.Setenv("PODMAN_COMPOSE_PROVIDER", filepath.Join(cwd, "scripts", fakeComposeBin)); err != nil {
+		Fail("failed to set PODMAN_COMPOSE_PROVIDER")
 	}
 	mb, err := newMB()
 	if err != nil {

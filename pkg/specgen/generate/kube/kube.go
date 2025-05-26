@@ -39,10 +39,11 @@ import (
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 	"sigs.k8s.io/yaml"
+	cdiparser "tags.cncf.io/container-device-interface/pkg/parser"
 )
 
 func ToPodOpt(ctx context.Context, podName string, p entities.PodCreateOptions, publishAllPorts bool, podYAML *v1.PodTemplateSpec) (entities.PodCreateOptions, error) {
-	p.Net = &entities.NetOptions{NoHosts: p.Net.NoHosts}
+	p.Net = &entities.NetOptions{NoHosts: p.Net.NoHosts, NoHostname: p.Net.NoHostname}
 
 	p.Name = podName
 	p.Labels = podYAML.ObjectMeta.Labels
@@ -276,36 +277,14 @@ func ToSpecGen(ctx context.Context, opts *CtrSpecGenOptions) (*specgen.SpecGener
 	// but apply to the containers with the prefixed name
 	s.SeccompProfilePath = opts.SeccompPaths.FindForContainer(opts.Container.Name)
 
-	s.ResourceLimits = &spec.LinuxResources{}
-	milliCPU := opts.Container.Resources.Limits.Cpu().MilliValue()
-	if milliCPU > 0 {
-		period, quota := util.CoresToPeriodAndQuota(float64(milliCPU) / 1000)
-		s.ResourceLimits.CPU = &spec.LinuxCPU{
-			Quota:  &quota,
-			Period: &period,
-		}
-	}
-
-	limit, err := quantityToInt64(opts.Container.Resources.Limits.Memory())
+	err = setupContainerResources(s, opts.Container)
 	if err != nil {
-		return nil, fmt.Errorf("failed to set memory limit: %w", err)
+		return nil, fmt.Errorf("failed to configure container resources: %w", err)
 	}
 
-	memoryRes, err := quantityToInt64(opts.Container.Resources.Requests.Memory())
+	err = setupContainerDevices(s, opts.Container)
 	if err != nil {
-		return nil, fmt.Errorf("failed to set memory reservation: %w", err)
-	}
-
-	if limit > 0 || memoryRes > 0 {
-		s.ResourceLimits.Memory = &spec.LinuxMemory{}
-	}
-
-	if limit > 0 {
-		s.ResourceLimits.Memory.Limit = &limit
-	}
-
-	if memoryRes > 0 {
-		s.ResourceLimits.Memory.Reservation = &memoryRes
+		return nil, fmt.Errorf("failed to configure container devices: %w", err)
 	}
 
 	ulimitVal, ok := opts.Annotations[define.UlimitAnnotation]
@@ -322,9 +301,13 @@ func ToSpecGen(ctx context.Context, opts *CtrSpecGenOptions) (*specgen.SpecGener
 
 	// TODO: We don't understand why specgen does not take of this, but
 	// integration tests clearly pointed out that it was required.
-	imageData, err := opts.Image.Inspect(ctx, nil)
-	if err != nil {
-		return nil, err
+	var imageData *libimage.ImageData
+	if opts.Image != nil {
+		var err error
+		imageData, err = opts.Image.Inspect(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 	s.WorkDir = "/"
 	// Entrypoint/Command handling is based off of
@@ -396,6 +379,20 @@ func ToSpecGen(ctx context.Context, opts *CtrSpecGenOptions) (*specgen.SpecGener
 		s.Annotations[define.InspectAnnotationApparmor] = apparmor
 	}
 
+	if pidslimit, ok := annotations[define.PIDsLimitAnnotation+"/"+opts.Container.Name]; ok {
+		s.Annotations[define.PIDsLimitAnnotation] = pidslimit
+		pidslimitAsInt, err := strconv.ParseInt(pidslimit, 10, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.ResourceLimits == nil {
+			s.ResourceLimits = &spec.LinuxResources{}
+		}
+		s.ResourceLimits.Pids = &spec.LinuxPids{
+			Limit: pidslimitAsInt,
+		}
+	}
+
 	if label, ok := opts.Annotations[define.InspectAnnotationLabel+"/"+opts.Container.Name]; ok {
 		if label == "nested" {
 			s.ContainerSecurityConfig.LabelNested = &localTrue
@@ -425,6 +422,10 @@ func ToSpecGen(ctx context.Context, opts *CtrSpecGenOptions) (*specgen.SpecGener
 		s.Annotations[define.InspectAnnotationInit] = init
 	}
 
+	s.HealthLogDestination = define.DefaultHealthCheckLocalDestination
+	s.HealthMaxLogCount = define.DefaultHealthMaxLogCount
+	s.HealthMaxLogSize = define.DefaultHealthMaxLogSize
+
 	if publishAll, ok := opts.Annotations[define.InspectAnnotationPublishAll+"/"+opts.Container.Name]; ok {
 		if opts.IsInfra {
 			publishAllAsBool, err := strconv.ParseBool(publishAll)
@@ -438,9 +439,6 @@ func ToSpecGen(ctx context.Context, opts *CtrSpecGenOptions) (*specgen.SpecGener
 	}
 
 	s.Annotations[define.KubeHealthCheckAnnotation] = "true"
-	s.HealthLogDestination = define.DefaultHealthCheckLocalDestination
-	s.HealthMaxLogCount = define.DefaultHealthMaxLogCount
-	s.HealthMaxLogSize = define.DefaultHealthMaxLogSize
 
 	// Environment Variables
 	envs := map[string]string{}
@@ -575,7 +573,7 @@ func ToSpecGen(ctx context.Context, opts *CtrSpecGenOptions) (*specgen.SpecGener
 				Destination: volume.MountPath,
 				ReadWrite:   false,
 				Source:      volumeSource.Source,
-				SubPath:     "",
+				SubPath:     volume.SubPath,
 			}
 			s.ImageVolumes = append(s.ImageVolumes, &imageVolume)
 		default:
@@ -838,6 +836,85 @@ func makeHealthCheck(inCmd string, interval int32, retries int32, timeout int32,
 	hc.StartPeriod = startPeriodDuration
 
 	return &hc, nil
+}
+
+func setupContainerResources(s *specgen.SpecGenerator, containerYAML v1.Container) error {
+	s.ResourceLimits = &spec.LinuxResources{}
+	milliCPU := containerYAML.Resources.Limits.Cpu().MilliValue()
+	if milliCPU > 0 {
+		period, quota := util.CoresToPeriodAndQuota(float64(milliCPU) / 1000)
+		s.ResourceLimits.CPU = &spec.LinuxCPU{
+			Quota:  &quota,
+			Period: &period,
+		}
+	}
+
+	limit, err := quantityToInt64(containerYAML.Resources.Limits.Memory())
+	if err != nil {
+		return fmt.Errorf("failed to set memory limit: %w", err)
+	}
+
+	memoryRes, err := quantityToInt64(containerYAML.Resources.Requests.Memory())
+	if err != nil {
+		return fmt.Errorf("failed to set memory reservation: %w", err)
+	}
+
+	if limit > 0 || memoryRes > 0 {
+		s.ResourceLimits.Memory = &spec.LinuxMemory{}
+	}
+
+	if limit > 0 {
+		s.ResourceLimits.Memory.Limit = &limit
+	}
+
+	if memoryRes > 0 {
+		s.ResourceLimits.Memory.Reservation = &memoryRes
+	}
+
+	return nil
+}
+
+const PodmanDeviceResourcePrefix = "io.podman/device"
+
+func setupContainerDevices(s *specgen.SpecGenerator, containerYAML v1.Container) error {
+	s.Devices = make([]spec.LinuxDevice, 0)
+	// avoid duplicates
+	devices := make(map[string]bool, 0)
+
+	parse := func(device string) error {
+		vendor, class, name := cdiparser.ParseDevice(device)
+		if vendor == "" {
+			return nil
+		}
+
+		if err := cdiparser.ValidateDeviceName(name); err != nil {
+			// handle internal "fake" CDI
+			if vendor == "podman.io" && class == "device" {
+				device = name
+			} else {
+				return fmt.Errorf("not a qualified name %v: %w", device, err)
+			}
+		}
+
+		if _, ok := devices[device]; !ok {
+			devices[device] = true
+			s.Devices = append(s.Devices, spec.LinuxDevice{Path: device})
+		}
+		return nil
+	}
+
+	for key := range containerYAML.Resources.Requests {
+		if err := parse(key.String()); err != nil {
+			return err
+		}
+	}
+	for key := range containerYAML.Resources.Limits {
+		if err := parse(key.String()); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func setupSecurityContext(s *specgen.SpecGenerator, securityContext *v1.SecurityContext, podSecurityContext *v1.PodSecurityContext) {

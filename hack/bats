@@ -6,7 +6,7 @@
 ###############################################################################
 # BEGIN usage message
 
-usage="Usage: $0 [--root] [--rootless] [FILENAME-PATTERN[:TEST-PATTERN]]
+usage="Usage: $0 [--root] [--rootless] [FILENAME-PATTERN[:TEST-PATTERN]]...
 
 $0 is a wrapper for invoking podman system tests.
 
@@ -26,6 +26,8 @@ $0 is a wrapper for invoking podman system tests.
    --tag=TAG      Passed on to bats as '--filter-tags TAG'
                   As of 2023-07-26 the only tag used is 'distro-integration'
 
+   -t, --tap      Passed on to bats, which will format output in TAP format
+
    -T             Passed on to bats, which will then show timing data
 
    --help         display usage message
@@ -43,8 +45,6 @@ To test podman-remote, start your own servers (root and rootless) via:
 servers, because we can sudo *starting* the service but can't sudo
 stopping it: by the time the bats tests finish, the sudo timeout will
 have expired. We apologize for the inconvenience.)
-
-$0 also passes through \$OCI_RUNTIME, should you need to test that.
 
 Examples:
 
@@ -65,7 +65,7 @@ export PODMAN=${PODMAN:-$(pwd)/bin/podman}
 export QUADLET=${QUADLET:-$(pwd)/bin/quadlet}
 
 # Directory in which
-TESTS=test/system
+TESTS_DIR=test/system
 
 REMOTE=
 TEST_ROOT=1
@@ -75,6 +75,8 @@ declare -a bats_opts=()
 
 declare -a bats_filter=()
 
+declare -a TESTS
+
 for i;do
     value=`expr "$i" : '[^=]*=\(.*\)'`
     case "$i" in
@@ -82,24 +84,29 @@ for i;do
         --root)     TEST_ROOTLESS= ;;
         --rootless) TEST_ROOT= ;;
         --remote)   REMOTE=remote ;;
+        --tap|-t)   bats_opts+=("-t") ;;
         --ts|-T)    bats_opts+=("-T") ;;
         --tag=*)    bats_filter=("--filter-tags" "$value")
                     if [[ "$value" = "ci:parallel" ]]; then
                         bats_opts+=("--jobs" $(nproc))
                     fi;;
-        */*.bats)   TESTS=$i ;;
+        */*.bats)   TESTS+=("$i") ;;
         *)
             if [[ $i =~ : ]]; then
                 tname=${i%:*}          # network:localhost -> network
                 filt=${i#*:}           # network:localhost ->   localhost
-                TESTS=$(echo $TESTS/*$tname*.bats)
+                TESTS+=($(echo $TESTS_DIR/*$tname*.bats))
                 bats_filter=("--filter" "$filt")
             else
-                TESTS=$(echo $TESTS/*$i*.bats)
+                TESTS+=($(echo $TESTS_DIR/*$i*.bats))
             fi
             ;;
     esac
 done
+
+if [ ${#TESTS[@]} -eq 0 ] ; then
+        TESTS=("$TESTS_DIR")
+fi
 
 # With --remote, use correct binary and make sure daem--I mean server--is live
 if [[ "$REMOTE" ]]; then
@@ -126,29 +133,28 @@ if [[ -z "$CONTAINERS_HELPER_BINARY_DIR" ]]; then
 fi
 
 # Used in 120-load test to identify rootless destination for podman image scp
-export PODMAN_ROOTLESS_USER=$(id -un)
+export PODMAN_ROOTLESS_USER=${PODMAN_ROOTLESS_USER:-$(id -un)}
 
 # Make sure to always check for leaks when running locally
 export PODMAN_BATS_LEAK_CHECK=1
 
 # Root
 if [[ "$TEST_ROOT" ]]; then
-    echo "# bats ${bats_opts[*]} ${bats_filter[*]} $TESTS"
+    echo "# bats ${bats_opts[*]} ${bats_filter[*]} ${TESTS[*]}"
     sudo    --preserve-env=PODMAN \
             --preserve-env=QUADLET \
             --preserve-env=PODMAN_TEST_DEBUG \
-            --preserve-env=OCI_RUNTIME \
             --preserve-env=CONTAINERS_HELPER_BINARY_DIR \
             --preserve-env=PODMAN_ROOTLESS_USER \
-            bats "${bats_opts[@]}" "${bats_filter[@]}" $TESTS
+            bats "${bats_opts[@]}" "${bats_filter[@]}" "${TESTS[@]}"
     rc=$?
 fi
 
 # Rootless. (Only if we're not already root)
 if [[ "$TEST_ROOTLESS" && "$(id -u)" != 0 ]]; then
     echo "--------------------------------------------------"
-    echo "\$ bats ${bats_opts[*]} ${bats_filter[*]} $TESTS"
-    bats "${bats_opts[@]}" "${bats_filter[@]}" $TESTS
+    echo "\$ bats ${bats_opts[*]} ${bats_filter[*]} ${TESTS[@]}"
+    bats "${bats_opts[@]}" "${bats_filter[@]}" "${TESTS[@]}"
     rc=$((rc | $?))
 fi
 

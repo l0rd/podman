@@ -170,14 +170,7 @@ func cUnescapeOne(p string, acceptNul bool) (int, rune, bool) {
 
 		ret = rune(c)
 		count = 9
-	case '0':
-	case '1':
-	case '2':
-	case '3':
-	case '4':
-	case '5':
-	case '6':
-	case '7':
+	case '0', '1', '2', '3', '4', '5', '6', '7':
 		/* octal encoding */
 
 		if len(p) < 3 {
@@ -189,12 +182,12 @@ func cUnescapeOne(p string, acceptNul bool) (int, rune, bool) {
 			return -1, 0, false
 		}
 
-		b := unoctchar(p[0])
+		b := unoctchar(p[1])
 		if b < 0 {
 			return -1, 0, false
 		}
 
-		c := unoctchar(p[0])
+		c := unoctchar(p[2])
 		if c < 0 {
 			return -1, 0, false
 		}
@@ -262,7 +255,7 @@ loop1:
 			goto finishForceTerminate
 		case strings.ContainsRune(separators, rune(c)):
 			if flags&SplitDontCoalesceSeparators != 0 {
-				if !(flags&SplitRetainSeparators != 0) {
+				if flags&SplitRetainSeparators == 0 {
 					p++
 				}
 				goto finishForceNext
@@ -339,7 +332,7 @@ loop1:
 					if flags&SplitUnquote != 0 {
 						break quoteloop
 					}
-				case c == '\\' && !(flags&SplitRetainEscape != 0):
+				case c == '\\' && (flags&SplitRetainEscape == 0):
 					backslash = true
 					break quoteloop
 				}
@@ -361,18 +354,18 @@ loop1:
 					if flags&SplitUnquote != 0 {
 						break nonquoteloop
 					}
-				case c == '\\' && !(flags&SplitRetainEscape != 0):
+				case c == '\\' && (flags&SplitRetainEscape == 0):
 					backslash = true
 					break nonquoteloop
 				case strings.ContainsRune(separators, rune(c)):
 					if flags&SplitDontCoalesceSeparators != 0 {
-						if !(flags&SplitRetainSeparators != 0) {
+						if flags&SplitRetainSeparators == 0 {
 							p++
 						}
 						goto finishForceNext
 					}
 
-					if !(flags&SplitRetainSeparators != 0) {
+					if flags&SplitRetainSeparators == 0 {
 						/* Skip additional coalesced separators. */
 						for ; ; c = nextChar() {
 							if c == 0 {
@@ -480,7 +473,7 @@ func escapeString(escaped *strings.Builder, word string, isPath bool) {
 			case '\\':
 				escaped.WriteString("\\\\")
 			case ' ':
-				escaped.WriteString(" ")
+				escaped.WriteString("\\x20")
 			case '"':
 				escaped.WriteString("\\\"")
 			case '\'':
@@ -490,7 +483,7 @@ func escapeString(escaped *strings.Builder, word string, isPath bool) {
 					escaped.WriteString("-")
 				}
 			default:
-				escaped.WriteString(fmt.Sprintf("\\x%.2x", c))
+				fmt.Fprintf(escaped, "\\x%.2x", c)
 			}
 		} else {
 			escaped.WriteRune(c)

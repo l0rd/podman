@@ -221,6 +221,8 @@ It does not affect _/etc/resolv.conf_ in the final image.
 
 @@option iidfile
 
+@@option inherit-labels
+
 @@option ipc.image
 
 @@option isolation
@@ -566,6 +568,23 @@ Build image using the specified network when running containers during the build
 $ podman build --network mynet .
 ```
 
+Build an image using a secret stored in an environment variable or file named `mysecret` to be used with the instruction `RUN --mount=type=secret,id=mysecret cat /run/secrets/mysecret`:
+```
+$ podman build --secret=id=mysecret .
+```
+
+Build an image using a secret stored in an environment variable named `MYSECRET` to be used with the instruction `RUN --mount=type=secret,id=mysecret cat /run/secrets/mysecret`:
+```
+$ podman build --secret=id=mysecret,env=MYSECRET .
+$ podman build --secret=id=mysecret,src=MYSECRET,type=env .
+```
+
+Build an image using a secret stored in a file named `.mysecret` to be used with the instruction `RUN --mount=type=secret,id=mysecret cat /run/secrets/mysecret`:
+```
+$ podman build --secret=id=mysecret,src=.mysecret .
+$ podman build --secret=id=mysecret,src=.mysecret,type=file .
+```
+
 ### Building a multi-architecture image using the --manifest option (requires emulation software)
 
 Build image using the specified architectures and link to a single manifest on successful completion:
@@ -682,15 +701,15 @@ mechanism:
 Exclude all doc files except Help.doc from the image.
 
 This functionality is compatible with the handling of .containerignore files
-described here:
+described here: **[containerignore(5)](https://github.com/containers/common/blob/main/docs/containerignore.5.md)**
 
-https://github.com/containers/common/blob/main/docs/containerignore.5.md
-
-**registries.conf** (`/etc/containers/registries.conf`)
+### registries.conf (`/etc/containers/registries.conf`)
 
 registries.conf is the configuration file which specifies which container
 registries is consulted when completing image names which do not include
 a registry or domain portion.
+See **[containers-registries.conf(5)](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)**
+
 
 ## Troubleshooting
 

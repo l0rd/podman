@@ -452,21 +452,6 @@ function clean_setup() {
     if [[ -z "$found_needed_image" ]]; then
         _prefetch $PODMAN_TEST_IMAGE_FQN
     fi
-
-    # Load (create, actually) the pause image. This way, all pod tests will
-    # have it available. Without this, pod tests run in parallel will leave
-    # behind <none>:<none> images.
-    # FIXME: only do this when running parallel! Otherwise, we may break
-    #        test expectations.
-    #        SUB-FIXME: there's no actual way to tell if we're running bats
-    #                   in parallel (see bats-core#998). Use undocumented hack.
-    # FIXME: #23292 -- this should not be necessary.
-    if [[ -n "$BATS_SEMAPHORE_DIR" ]]; then
-        run_podman pod create mypod
-        run_podman pod rm mypod
-        # And now, we have a pause image, and each test does not
-        # need to build their own.
-    fi
 }
 
 # END   setup/teardown tools
@@ -812,15 +797,6 @@ function journald_unavailable() {
     return 1
 }
 
-# Returns the name of the local pause image.
-function pause_image() {
-    # This function is intended to be used as '$(pause_image)', i.e.
-    # our caller wants our output. run_podman() messes with output because
-    # it emits the command invocation to stdout, hence the redirection.
-    run_podman version --format "{{.Server.Version}}-{{.Server.Built}}" >/dev/null
-    echo "localhost/podman-pause:$output"
-}
-
 # Wait for the pod (1st arg) to transition into the state (2nd arg)
 function _ensure_pod_state() {
     for i in {0..5}; do
@@ -845,17 +821,6 @@ function _ensure_container_running() {
     done
 
     die "Timed out waiting for container $1 to enter state running=$2"
-}
-
-# Return the config digest of an image in containers-storage.
-# The input can be a named reference, or an @imageID (including shorter imageID prefixes)
-# Historically, the image ID was a good indicator of “the same” image;
-# with zstd:chunked, the same image might have different IDs depending on whether
-# creating layers happened based on the TOC (and per-file operations) or the full layer tarball
-function image_config_digest() {
-    local sha_output; sha_output=$(skopeo inspect --raw --config "containers-storage:$1" | sha256sum)
-    # strip filename ("-") from sha output
-    echo "${sha_output%% *}"
 }
 
 ###########################
@@ -1371,6 +1336,41 @@ function wait_for_command_output() {
 function make_random_file() {
     dd if=/dev/urandom of="$1" bs=1 count=${2:-$((${RANDOM} % 8192 + 1024))} status=none
 }
+
+###########################
+# ensure there is no mount point at the specified path
+###########################
+function ensure_no_mountpoint() {
+    local path="$1"
+    if findmnt "$path"; then
+        die "there is a mountpoint at $path"
+    fi
+}
+
+###########################
+# ensure container has been restarted requested times
+###########################
+function wait_for_restart_count() {
+    local cname="$1"
+    local count="$2"
+    local tname="$3"
+
+    local timeout=10
+    while :; do
+        # Previously this would fail as the container would run out of ips after 5 restarts.
+        run_podman inspect --format "{{.RestartCount}}" $cname
+        if [[ "$output" == "$2" ]]; then
+            break
+        fi
+
+        timeout=$((timeout - 1))
+        if [[ $timeout -eq 0 ]]; then
+            die "Timed out waiting for RestartCount with $tname"
+        fi
+        sleep 0.5
+    done
+}
+
 
 # END   miscellaneous tools
 ###############################################################################

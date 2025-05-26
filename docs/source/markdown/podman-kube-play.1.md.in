@@ -28,11 +28,12 @@ Currently, the supported Kubernetes kinds are:
 
 `Kubernetes Pods or Deployments`
 
-Only four volume types are supported by kube play, the *hostPath*, *emptyDir*, *persistentVolumeClaim*, and *image* volume types.
+Only five volume types are supported by kube play, the *hostPath*, *emptyDir*, *configMap*, *persistentVolumeClaim*, and *image* volume types.
 
 - When using the *hostPath* volume type, only the  *default (empty)*, *DirectoryOrCreate*, *Directory*, *FileOrCreate*, *File*, *Socket*, *CharDevice* and *BlockDevice* subtypes are supported. Podman interprets the value of *hostPath* *path* as a file path when it contains at least one forward slash, otherwise Podman treats the value as the name of a named volume.
 - When using a *persistentVolumeClaim*, the value for *claimName* is the name for the Podman named volume.
 - When using an *emptyDir* volume, Podman creates an anonymous volume that is attached the containers running inside the pod and is deleted once the pod is removed.
+- When using an *configMap* volume, Podman creates an anonymous volume that is attached the containers running inside the pod and is deleted once the pod is removed.
 - When using an *image* volume, Podman creates a read-only image volume with an empty subpath (the whole image is mounted). The image must already exist locally. It is supported in rootful mode only.
 
 Note: The default restart policy for containers is `always`.  You can change the default by setting the `restartPolicy` field in the spec.
@@ -53,6 +54,8 @@ Note: The command `podman kube down` can be used to stop and remove pods or cont
 by `podman kube play` to create them.
 
 Note: To customize the name of the infra container created during `podman kube play`, use the **io.podman.annotations.infra.name** annotation in the pod definition. This annotation is automatically set when generating a kube yaml from a pod that was created with the `--infra-name` flag set.
+
+Note: Use the **io.podman.annotations.pids-limit/$ctrname** annotation to configure the pod's pids limit.
 
 `Kubernetes PersistentVolumeClaims`
 
@@ -96,6 +99,23 @@ like:
 The build considers `foobar` to be the context directory for the build. If there is an image in local storage
 called `foobar`, the image is not built unless the `--build` flag is used. Use `--build=false` to completely
 disable builds.
+
+Kube play supports CDI (Container Device Interface) device selectors to share
+host devices (e.g. GPUs) with containers. The configuration format follows
+Kubernetes extended resource management:
+```
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: container
+    resources:
+      limits:
+        nvidia.com/gpu=all: 1
+```
+
+To enable sharing host devices, analogous to using the `--device` flag Podman
+kube supports a custom CDI selector: `podman.io/device=<host device path>`.
 
 `Kubernetes ConfigMap`
 
@@ -227,6 +247,8 @@ Note: When joining multiple networks use the **--network name:mac=\<mac\>** synt
 @@option network
 
 When no network option is specified and *host* network mode is not configured in the YAML file, a new network stack is created and pods are attached to it making possible pod to pod communication.
+
+@@option no-hostname
 
 @@option no-hosts
 

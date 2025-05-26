@@ -20,21 +20,23 @@ import (
 // It returns the path of the created /etc/localtime file if needed.
 func ConfigureContainerTimeZone(timezone, containerRunDir, mountPoint, etcPath, containerID string) (localTimePath string, err error) {
 	var timezonePath string
-	switch {
-	case timezone == "":
+	switch timezone {
+	case "":
 		return "", nil
-	case os.Getenv("TZDIR") != "":
-		// Allow using TZDIR per:
-		// https://sourceware.org/git/?p=glibc.git;a=blob;f=time/tzfile.c;h=8a923d0cccc927a106dc3e3c641be310893bab4e;hb=HEAD#l149
-
-		timezonePath = filepath.Join(os.Getenv("TZDIR"), timezone)
-	case timezone == "local":
+	case "local":
 		timezonePath, err = filepath.EvalSymlinks("/etc/localtime")
 		if err != nil {
 			return "", fmt.Errorf("finding local timezone for container %s: %w", containerID, err)
 		}
 	default:
-		timezonePath = filepath.Join("/usr/share/zoneinfo", timezone)
+		// Allow using TZDIR per:
+		// https://sourceware.org/git/?p=glibc.git;a=blob;f=time/tzfile.c;h=8a923d0cccc927a106dc3e3c641be310893bab4e;hb=HEAD#l149
+		zoneinfo := os.Getenv("TZDIR")
+		if zoneinfo == "" {
+			// default zoneinfo location
+			zoneinfo = "/usr/share/zoneinfo"
+		}
+		timezonePath = filepath.Join(zoneinfo, timezone)
 	}
 
 	etcFd, err := openDirectory(etcPath)

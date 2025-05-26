@@ -11,7 +11,7 @@ import (
 	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/domain/entities/reports"
 	"github.com/containers/podman/v5/pkg/inspect"
-	dockerAPI "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	dockerImage "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
@@ -125,7 +125,7 @@ type inspectImageResponseLibpod struct {
 // swagger:response
 type containerInspectResponse struct {
 	// in:body
-	Body dockerAPI.ContainerJSON
+	Body container.InspectResponse
 }
 
 // List processes in container
@@ -324,9 +324,13 @@ type containerCreateResponse struct {
 	Body entities.ContainerCreateResponse
 }
 
+// Update container
+// swagger:response
 type containerUpdateResponse struct {
 	// in:body
-	ID string
+	Body struct {
+		ID string
+	}
 }
 
 // Wait container

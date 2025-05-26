@@ -27,6 +27,8 @@ type MachineConfig struct {
 	SSH       SSHConfig
 	Version   uint
 
+	Swap strongunits.MiB
+
 	// Image stuff
 	imageDescription machineImage //nolint:unused
 
@@ -39,7 +41,7 @@ type MachineConfig struct {
 	QEMUHypervisor    *QEMUConfig    `json:",omitempty"`
 	WSLHypervisor     *WSLConfig     `json:",omitempty"`
 
-	lock *lockfile.LockFile //nolint:unused
+	lock *lockfile.LockFile
 
 	// configPath can be used for reading, writing, removing
 	configPath *define.VMFile
@@ -53,6 +55,8 @@ type MachineConfig struct {
 	Starting bool
 
 	Rosetta bool
+
+	Ansible *AnsibleConfig
 }
 
 type machineImage interface { //nolint:unused
@@ -147,4 +151,10 @@ type VMStats struct {
 	Created time.Time
 	// LastUp contains the last recorded uptime
 	LastUp time.Time
+}
+
+type AnsibleConfig struct {
+	PlaybookPath string
+	Contents     string
+	User         string
 }

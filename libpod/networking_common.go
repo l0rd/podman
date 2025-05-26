@@ -55,9 +55,10 @@ func (c *Container) getNetworkOptions(networkOpts map[string]types.PerNetworkOpt
 		nameservers = append(nameservers, ip.String())
 	}
 	opts := types.NetworkOptions{
-		ContainerID:   c.config.ID,
-		ContainerName: getNetworkPodName(c),
-		DNSServers:    nameservers,
+		ContainerID:       c.config.ID,
+		ContainerName:     getNetworkPodName(c),
+		DNSServers:        nameservers,
+		ContainerHostname: c.NetworkHostname(),
 	}
 	opts.PortMappings = c.convertPortMappings()
 
@@ -211,11 +212,19 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 		return nil, err
 	}
 
+	getNetworkID := func(nameOrID string) string {
+		network, err := c.runtime.network.NetworkInspect(nameOrID)
+		if err == nil && network.ID != "" {
+			return network.ID
+		}
+		return nameOrID
+	}
+
 	setDefaultNetworks := func() {
 		settings.Networks = make(map[string]*define.InspectAdditionalNetwork, 1)
 		name := c.NetworkMode()
 		addedNet := new(define.InspectAdditionalNetwork)
-		addedNet.NetworkID = name
+		addedNet.NetworkID = getNetworkID(name)
 		settings.Networks[name] = addedNet
 	}
 
@@ -243,7 +252,7 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 			settings.Networks = make(map[string]*define.InspectAdditionalNetwork, len(networks))
 			for net, opts := range networks {
 				cniNet := new(define.InspectAdditionalNetwork)
-				cniNet.NetworkID = net
+				cniNet.NetworkID = getNetworkID(net)
 				cniNet.Aliases = opts.Aliases
 				settings.Networks[net] = cniNet
 			}
@@ -274,7 +283,7 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 		for name, opts := range networks {
 			result := netStatus[name]
 			addedNet := new(define.InspectAdditionalNetwork)
-			addedNet.NetworkID = name
+			addedNet.NetworkID = getNetworkID(name)
 			addedNet.Aliases = opts.Aliases
 			addedNet.InspectBasicNetworkConfig = resultToBasicNetworkConfig(result)
 
@@ -284,7 +293,7 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 		// if not only the default network is connected we can return here
 		// otherwise we have to populate the InspectBasicNetworkConfig settings
 		_, isDefaultNet := networks[c.runtime.config.Network.DefaultNetwork]
-		if !(len(networks) == 1 && isDefaultNet) {
+		if len(networks) != 1 || !isDefaultNet {
 			return settings, nil
 		}
 	} else {
@@ -369,7 +378,7 @@ func (c *Container) NetworkDisconnect(nameOrID, netName string, force bool) erro
 		return err
 	}
 
-	_, nameExists := networks[netName]
+	netOpts, nameExists := networks[netName]
 	if !nameExists && len(networks) > 0 {
 		return fmt.Errorf("container %s is not connected to network %s", nameOrID, netName)
 	}
@@ -384,12 +393,20 @@ func (c *Container) NetworkDisconnect(nameOrID, netName string, force bool) erro
 		return err
 	}
 
+	// Since we removed the new network from the container db we must have to add it back during partial setup errors
+	addContainerNetworkToDB := func() {
+		if err := c.runtime.state.NetworkConnect(c, netName, netOpts); err != nil {
+			logrus.Errorf("Failed to add network %s for container %s to DB after failed network disconnect", netName, nameOrID)
+		}
+	}
+
 	c.newNetworkEvent(events.NetworkDisconnect, netName)
 	if !c.ensureState(define.ContainerStateRunning, define.ContainerStateCreated) {
 		return nil
 	}
 
 	if c.state.NetNS == "" {
+		addContainerNetworkToDB()
 		return fmt.Errorf("unable to disconnect %s from %s: %w", nameOrID, netName, define.ErrNoNetwork)
 	}
 
@@ -403,6 +420,7 @@ func (c *Container) NetworkDisconnect(nameOrID, netName string, force bool) erro
 	}
 
 	if err := c.runtime.teardownNetworkBackend(c.state.NetNS, opts); err != nil {
+		addContainerNetworkToDB()
 		return err
 	}
 
@@ -515,11 +533,20 @@ func (c *Container) NetworkConnect(nameOrID, netName string, netOpts types.PerNe
 
 		return err
 	}
+
+	// Since we added the new network to the container db we must have to remove it from that during partial setup errors
+	removeContainerNetworkFromDB := func() {
+		if err := c.runtime.state.NetworkDisconnect(c, netName); err != nil {
+			logrus.Errorf("Failed to remove network %s for container %s from DB after failed network connect", netName, nameOrID)
+		}
+	}
+
 	c.newNetworkEvent(events.NetworkConnect, netName)
 	if !c.ensureState(define.ContainerStateRunning, define.ContainerStateCreated) {
 		return nil
 	}
 	if c.state.NetNS == "" {
+		removeContainerNetworkFromDB()
 		return fmt.Errorf("unable to connect %s to %s: %w", nameOrID, netName, define.ErrNoNetwork)
 	}
 
@@ -534,6 +561,7 @@ func (c *Container) NetworkConnect(nameOrID, netName string, netOpts types.PerNe
 
 	results, err := c.runtime.setUpNetwork(c.state.NetNS, opts)
 	if err != nil {
+		removeContainerNetworkFromDB()
 		return err
 	}
 	if len(results) != 1 {

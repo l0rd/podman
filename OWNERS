@@ -3,23 +3,20 @@ approvers:
   - TomSweeneyRedHat
   - ashley-cui
   - baude
-  - edsantiago
   - giuseppe
   - l0rd
   - lsm5
   - mheon
   - mtrmac
-  - rhatdan
-  - vrothberg
+  - nalind
   - ygalblum
 reviewers:
   - Luap99
   - TomSweeneyRedHat
-  - alexlarsson
   - baude
-  - edsantiago
   - flouthoc
   - giuseppe
+  - Honny1
   - jakecorrenti
   - jwhonce
   - l0rd
@@ -27,6 +24,7 @@ reviewers:
   - mheon
   - mtrmac
   - n1hility
+  - nalind
   - rhatdan
   - umohnani8
   - vrothberg

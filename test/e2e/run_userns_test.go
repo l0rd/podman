@@ -93,7 +93,6 @@ var _ = Describe("Podman UserNS support", func() {
 
 	It("podman uidmapping and gidmapping with an idmapped volume", func() {
 		SkipIfRunc(podmanTest, "Test not supported yet with runc (issue 17433, wontfix)")
-		SkipOnOSVersion("fedora", "36")
 		session := podmanTest.Podman([]string{"run", "--uidmap=0:1:500", "--gidmap=0:200:5000", "-v", "my-foo-volume:/foo:Z,idmap", "alpine", "stat", "-c", "#%u:%g#", "/foo"})
 		session.WaitWithDefaultTimeout()
 		if strings.Contains(session.ErrorToString(), "Operation not permitted") {
@@ -108,7 +107,6 @@ var _ = Describe("Podman UserNS support", func() {
 
 	It("podman uidmapping and gidmapping with an idmapped volume on existing directory", func() {
 		SkipIfRunc(podmanTest, "Test not supported yet with runc (issue 17433, wontfix)")
-		SkipOnOSVersion("fedora", "36")
 		// The directory /mnt already exists in the image
 		session := podmanTest.Podman([]string{"run", "--uidmap=0:1:500", "--gidmap=0:200:5000", "-v", "my-foo-volume:/mnt:Z,idmap", "alpine", "stat", "-c", "#%u:%g#", "/mnt"})
 		session.WaitWithDefaultTimeout()
@@ -158,6 +156,18 @@ var _ = Describe("Podman UserNS support", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		Expect(session.OutputToString()).To(Equal("0"))
+	})
+
+	It("podman --userns=keep-id:size", func() {
+		session := podmanTest.Podman([]string{"run", "--userns=keep-id:size=10", ALPINE, "sh", "-c", "(awk 'BEGIN{SUM=0} {SUM += $3} END{print SUM}' < /proc/self/uid_map)"})
+		session.WaitWithDefaultTimeout()
+
+		if isRootless() {
+			Expect(session).Should(ExitCleanly())
+			Expect(session.OutputToString()).To(Equal("10"))
+		} else {
+			Expect(session).Should(ExitWithError(125, "cannot set max size for user namespace when not running rootless"))
+		}
 	})
 
 	It("podman --userns=keep-id --user root:root", func() {

@@ -24,10 +24,10 @@ import (
 	"github.com/containers/podman/v5/pkg/ps"
 	"github.com/containers/podman/v5/pkg/signal"
 	"github.com/containers/podman/v5/pkg/util"
-	"github.com/docker/docker/api/types"
 	dockerBackend "github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/storage"
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
@@ -342,30 +342,51 @@ func LibpodToContainer(l *libpod.Container, sz bool) (*handlers.Container, error
 		}
 	}
 
-	portMappings, err := l.PortMappings()
+	inspect, err := l.Inspect(false)
 	if err != nil {
 		return nil, err
 	}
 
-	ports := make([]types.Port, len(portMappings))
-	for idx, portMapping := range portMappings {
-		ports[idx] = types.Port{
-			IP:          portMapping.HostIP,
-			PrivatePort: portMapping.ContainerPort,
-			PublicPort:  portMapping.HostPort,
-			Type:        portMapping.Protocol,
+	ports := []container.Port{}
+	for portKey, bindings := range inspect.NetworkSettings.Ports {
+		portNum, proto, ok := strings.Cut(portKey, "/")
+		if !ok {
+			return nil, fmt.Errorf("PORT/PROTOCOL format required for %q", portKey)
 		}
-	}
-	inspect, err := l.Inspect(false)
-	if err != nil {
-		return nil, err
+
+		containerPort, err := strconv.Atoi(portNum)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(bindings) == 0 {
+			// Exposed but not published
+			ports = append(ports, container.Port{
+				PrivatePort: uint16(containerPort),
+				Type:        proto,
+			})
+		} else {
+			for _, b := range bindings {
+				hostPortInt, err := strconv.Atoi(b.HostPort)
+				if err != nil {
+					return nil, fmt.Errorf("invalid HostPort: %v", err)
+				}
+
+				ports = append(ports, container.Port{
+					IP:          b.HostIP,
+					PrivatePort: uint16(containerPort),
+					PublicPort:  uint16(hostPortInt),
+					Type:        proto,
+				})
+			}
+		}
 	}
 
 	n, err := json.Marshal(inspect.NetworkSettings)
 	if err != nil {
 		return nil, err
 	}
-	networkSettings := types.SummaryNetworkSettings{}
+	networkSettings := container.NetworkSettingsSummary{}
 	if err := json.Unmarshal(n, &networkSettings); err != nil {
 		return nil, err
 	}
@@ -374,13 +395,13 @@ func LibpodToContainer(l *libpod.Container, sz bool) (*handlers.Container, error
 	if err != nil {
 		return nil, err
 	}
-	mounts := []types.MountPoint{}
+	mounts := []container.MountPoint{}
 	if err := json.Unmarshal(m, &mounts); err != nil {
 		return nil, err
 	}
 
 	return &handlers.Container{
-		Container: types.Container{
+		Container: container.Summary{
 			ID:         l.ID(),
 			Names:      []string{fmt.Sprintf("/%s", l.Name())},
 			Image:      imageName,
@@ -408,7 +429,7 @@ func LibpodToContainer(l *libpod.Container, sz bool) (*handlers.Container, error
 	}, nil
 }
 
-func convertSecondaryIPPrefixLen(input *define.InspectNetworkSettings, output *types.NetworkSettings) {
+func convertSecondaryIPPrefixLen(input *define.InspectNetworkSettings, output *container.NetworkSettings) {
 	for index, ip := range input.SecondaryIPAddresses {
 		output.SecondaryIPAddresses[index].PrefixLen = ip.PrefixLength
 	}
@@ -417,7 +438,7 @@ func convertSecondaryIPPrefixLen(input *define.InspectNetworkSettings, output *t
 	}
 }
 
-func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, error) {
+func LibpodToContainerJSON(l *libpod.Container, sz bool) (*container.InspectResponse, error) {
 	imageID, imageName := l.Image()
 	inspect, err := l.Inspect(sz)
 	if err != nil {
@@ -432,7 +453,7 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, 
 	if err != nil {
 		return nil, err
 	}
-	state := types.ContainerState{}
+	state := container.State{}
 	if err := json.Unmarshal(i, &state); err != nil {
 		return nil, err
 	}
@@ -442,20 +463,31 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, 
 		state.Running = true
 	}
 
-	// Dockers created state is our configured state
-	if state.Status == define.ContainerStateCreated.String() {
-		state.Status = define.ContainerStateConfigured.String()
+	// map our statuses to Docker's statuses
+	switch state.Status {
+	case define.ContainerStateConfigured.String(), define.ContainerStateCreated.String():
+		state.Status = "created"
+	case define.ContainerStateRunning.String(), define.ContainerStateStopping.String():
+		state.Status = "running"
+	case define.ContainerStatePaused.String():
+		state.Status = "paused"
+	case define.ContainerStateRemoving.String():
+		state.Status = "removing"
+	case define.ContainerStateStopped.String(), define.ContainerStateExited.String():
+		state.Status = "exited"
+	default:
+		state.Status = "" // unknown state
 	}
 
 	if l.HasHealthCheck() && state.Status != "created" {
-		state.Health = &types.Health{}
+		state.Health = &container.Health{}
 		if inspect.State.Health != nil {
 			state.Health.Status = inspect.State.Health.Status
 			state.Health.FailingStreak = inspect.State.Health.FailingStreak
 			log := inspect.State.Health.Log
 
 			for _, item := range log {
-				res := &types.HealthcheckResult{}
+				res := &container.HealthcheckResult{}
 				s, err := time.Parse(time.RFC3339Nano, item.Start)
 				if err != nil {
 					return nil, err
@@ -486,20 +518,25 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, 
 	}
 	sort.Strings(hc.Binds)
 
+	// Map CgroupMode to CgroupnsMode for Docker API compatibility
+	switch inspect.HostConfig.CgroupMode {
+	case "private":
+		hc.CgroupnsMode = container.CgroupnsModePrivate
+	case "host":
+		hc.CgroupnsMode = container.CgroupnsModeHost
+	}
+
 	// k8s-file == json-file
 	if hc.LogConfig.Type == define.KubernetesLogging {
 		hc.LogConfig.Type = define.JSONLogging
 	}
-	g, err := json.Marshal(inspect.GraphDriver)
-	if err != nil {
-		return nil, err
-	}
-	graphDriver := types.GraphDriverData{}
-	if err := json.Unmarshal(g, &graphDriver); err != nil {
-		return nil, err
+
+	graphDriver := storage.DriverData{
+		Name: inspect.GraphDriver.Name,
+		Data: inspect.GraphDriver.Data,
 	}
 
-	cb := types.ContainerJSONBase{
+	cb := container.ContainerJSONBase{
 		ID:              l.ID(),
 		Created:         l.CreatedTime().UTC().Format(time.RFC3339Nano), // Docker uses UTC
 		Path:            inspect.Path,
@@ -510,7 +547,6 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, 
 		HostnamePath:    inspect.HostnamePath,
 		HostsPath:       inspect.HostsPath,
 		LogPath:         l.LogPath(),
-		Node:            nil,
 		Name:            fmt.Sprintf("/%s", l.Name()),
 		RestartCount:    int(inspect.RestartCount),
 		Driver:          inspect.Driver,
@@ -588,7 +624,7 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, 
 	if err != nil {
 		return nil, err
 	}
-	mounts := []types.MountPoint{}
+	mounts := []container.MountPoint{}
 	if err := json.Unmarshal(m, &mounts); err != nil {
 		return nil, err
 	}
@@ -607,7 +643,7 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, 
 		return nil, err
 	}
 
-	networkSettings := types.NetworkSettings{}
+	networkSettings := container.NetworkSettings{}
 	if err := json.Unmarshal(n, &networkSettings); err != nil {
 		return nil, err
 	}
@@ -619,7 +655,7 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*types.ContainerJSON, 
 		networkSettings.Networks = map[string]*network.EndpointSettings{}
 	}
 
-	c := types.ContainerJSON{
+	c := container.InspectResponse{
 		ContainerJSONBase: &cb,
 		Mounts:            mounts,
 		Config:            &config,
@@ -786,11 +822,18 @@ func UpdateContainer(w http.ResponseWriter, r *http.Request) {
 		restartRetries = &localRetries
 	}
 
-	if err := ctr.Update(resources, restartPolicy, restartRetries); err != nil {
+	updateOptions := &entities.ContainerUpdateOptions{
+		Resources:                       resources,
+		ChangedHealthCheckConfiguration: &define.UpdateHealthCheckConfig{},
+		RestartPolicy:                   restartPolicy,
+		RestartRetries:                  restartRetries,
+	}
+
+	if err := ctr.Update(updateOptions); err != nil {
 		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("updating container: %w", err))
 		return
 	}
 
-	responseStruct := container.ContainerUpdateOKBody{}
+	responseStruct := container.UpdateResponse{}
 	utils.WriteResponse(w, http.StatusOK, responseStruct)
 }

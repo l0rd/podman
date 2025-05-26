@@ -209,6 +209,12 @@ mount -t tmpfs -o size=75%,mode=0700 none /var/lib/containers
 showrun echo "Setting CI_DESIRED_STORAGE [=$CI_DESIRED_STORAGE] for *e2e* tests"
 echo "STORAGE_FS=$CI_DESIRED_STORAGE" >>/etc/ci_environment
 
+if ((CONTAINER==0)); then  # not yet inside a container
+    # Load null_blk to use /dev/nullb0 for testing block
+    # devices limits
+    modprobe null_blk nr_devices=1 || :
+fi
+
 # Required to be defined by caller: The environment where primary testing happens
 # shellcheck disable=SC2154
 showrun echo "about to set up for TEST_ENVIRON [=$TEST_ENVIRON]"
@@ -383,7 +389,7 @@ case "$TEST_FLAVOR" in
         ;;
     compose_v2)
         showrun dnf -y remove docker-compose
-        showrun curl -SL https://github.com/docker/compose/releases/download/v2.2.3/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+        showrun curl -SL https://github.com/docker/compose/releases/download/v2.32.3/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
         showrun chmod +x /usr/local/bin/docker-compose
         ;& # Continue with next item
     apiv2)

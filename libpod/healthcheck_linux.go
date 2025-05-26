@@ -4,6 +4,7 @@ package libpod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -55,7 +56,11 @@ func (c *Container) createTimer(interval string, isStartup bool) error {
 	logrus.Debugf("creating systemd-transient files: %s %s", "systemd-run", cmd)
 	systemdRun := exec.Command("systemd-run", cmd...)
 	if output, err := systemdRun.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s", output)
+		exitError := &exec.ExitError{}
+		if errors.As(err, &exitError) {
+			return fmt.Errorf("systemd-run failed: %w: output: %s", err, strings.TrimSpace(string(output)))
+		}
+		return fmt.Errorf("failed to execute systemd-run: %w", err)
 	}
 
 	c.state.HCUnitName = hcUnitName
@@ -137,19 +142,20 @@ func (c *Container) removeTransientFiles(ctx context.Context, isStartup bool, un
 		stopErrors = append(stopErrors, fmt.Errorf("stopping systemd health-check timer %q: %w", timerFile, err))
 	}
 
-	// Reset the service before stopping it to make sure it's being removed
-	// on stop.
 	serviceChan := make(chan string)
 	serviceFile := fmt.Sprintf("%s.service", unitName)
-	if err := conn.ResetFailedUnitContext(ctx, serviceFile); err != nil {
-		logrus.Debugf("Failed to reset unit file: %q", err)
-	}
 	if _, err := conn.StopUnitContext(ctx, serviceFile, "ignore-dependencies", serviceChan); err != nil {
 		if !strings.HasSuffix(err.Error(), ".service not loaded.") {
 			stopErrors = append(stopErrors, fmt.Errorf("removing health-check service %q: %w", serviceFile, err))
 		}
 	} else if err := systemdOpSuccessful(serviceChan); err != nil {
 		stopErrors = append(stopErrors, fmt.Errorf("stopping systemd health-check service %q: %w", serviceFile, err))
+	}
+	// Reset the service after stopping it to make sure it's being removed, systemd keep failed transient services
+	// around in its state. We do not care about the error and we need to ensure to reset the state so we do not
+	// leak resources forever.
+	if err := conn.ResetFailedUnitContext(ctx, serviceFile); err != nil {
+		logrus.Debugf("Failed to reset unit file: %q", err)
 	}
 
 	return errorhandling.JoinErrors(stopErrors)

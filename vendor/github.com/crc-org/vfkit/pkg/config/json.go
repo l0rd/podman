@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 )
 
 // The technique for json (de)serialization was explained here:
@@ -21,11 +22,15 @@ const (
 	vfBlk          vmComponentKind = "virtioblk"
 	vfFs           vmComponentKind = "virtiofs"
 	vfRng          vmComponentKind = "virtiorng"
+	vfBalloon      vmComponentKind = "virtioballoon"
 	vfSerial       vmComponentKind = "virtioserial"
 	vfGpu          vmComponentKind = "virtiogpu"
 	vfInput        vmComponentKind = "virtioinput"
 	usbMassStorage vmComponentKind = "usbmassstorage"
+	nvme           vmComponentKind = "nvme"
 	rosetta        vmComponentKind = "rosetta"
+	ignition       vmComponentKind = "ignition"
+	vfNbd          vmComponentKind = "nbd"
 )
 
 type jsonKind struct {
@@ -87,6 +92,38 @@ func unmarshalDevices(rawMsg json.RawMessage) ([]VirtioDevice, error) {
 	return devices, nil
 }
 
+func unmarshalIgnition(rawMsg json.RawMessage) (Ignition, error) {
+	var ignition Ignition
+
+	err := json.Unmarshal(rawMsg, &ignition)
+	if err != nil {
+		return Ignition{}, err
+	}
+
+	return ignition, nil
+}
+
+// VirtioNet needs a custom unmarshaller as net.HardwareAddress is not
+// serialized/unserialized in its expected format, instead of
+// '00:11:22:33:44:55', it's serialized as base64-encoded raw bytes such as
+// 'ABEiM0RV'. This custom (un)marshalling code will use the desired format.
+func unmarshalVirtioNet(rawMsg json.RawMessage) (*VirtioNet, error) {
+	var dev virtioNetForMarshalling
+
+	err := json.Unmarshal(rawMsg, &dev)
+	if err != nil {
+		return nil, err
+	}
+	if dev.MacAddress != "" {
+		macAddr, err := net.ParseMAC(dev.MacAddress)
+		if err != nil {
+			return nil, err
+		}
+		dev.VirtioNet.MacAddress = macAddr
+	}
+	return &dev.VirtioNet, nil
+}
+
 func unmarshalDevice(rawMsg json.RawMessage) (VirtioDevice, error) {
 	var (
 		kind jsonKind
@@ -98,15 +135,17 @@ func unmarshalDevice(rawMsg json.RawMessage) (VirtioDevice, error) {
 	}
 	switch kind.Kind {
 	case vfNet:
-		var newDevice VirtioNet
-		err = json.Unmarshal(rawMsg, &newDevice)
-		dev = &newDevice
+		dev, err = unmarshalVirtioNet(rawMsg)
 	case vfVsock:
 		var newDevice VirtioVsock
 		err = json.Unmarshal(rawMsg, &newDevice)
 		dev = &newDevice
 	case vfBlk:
 		var newDevice VirtioBlk
+		err = json.Unmarshal(rawMsg, &newDevice)
+		dev = &newDevice
+	case nvme:
+		var newDevice NVMExpressController
 		err = json.Unmarshal(rawMsg, &newDevice)
 		dev = &newDevice
 	case vfFs:
@@ -119,6 +158,10 @@ func unmarshalDevice(rawMsg json.RawMessage) (VirtioDevice, error) {
 		dev = &newDevice
 	case vfRng:
 		var newDevice VirtioRng
+		err = json.Unmarshal(rawMsg, &newDevice)
+		dev = &newDevice
+	case vfBalloon:
+		var newDevice VirtioBalloon
 		err = json.Unmarshal(rawMsg, &newDevice)
 		dev = &newDevice
 	case vfSerial:
@@ -135,6 +178,10 @@ func unmarshalDevice(rawMsg json.RawMessage) (VirtioDevice, error) {
 		dev = &newDevice
 	case usbMassStorage:
 		var newDevice USBMassStorage
+		err = json.Unmarshal(rawMsg, &newDevice)
+		dev = &newDevice
+	case vfNbd:
+		var newDevice NetworkBlockDevice
 		err = json.Unmarshal(rawMsg, &newDevice)
 		dev = &newDevice
 	default:
@@ -168,7 +215,7 @@ func (vm *VirtualMachine) UnmarshalJSON(b []byte) error {
 		case "vcpus":
 			err = json.Unmarshal(*rawMsg, &vm.Vcpus)
 		case "memoryBytes":
-			err = json.Unmarshal(*rawMsg, &vm.MemoryBytes)
+			err = json.Unmarshal(*rawMsg, &vm.Memory)
 		case "bootloader":
 			var bootloader Bootloader
 			bootloader, err = unmarshalBootloader(*rawMsg)
@@ -182,6 +229,11 @@ func (vm *VirtualMachine) UnmarshalJSON(b []byte) error {
 			devices, err = unmarshalDevices(*rawMsg)
 			if err == nil {
 				vm.Devices = devices
+			}
+		case "ignition":
+			ignition, err := unmarshalIgnition(*rawMsg)
+			if err == nil {
+				vm.Ignition = &ignition
 			}
 		}
 
@@ -214,14 +266,22 @@ func (bootloader *LinuxBootloader) MarshalJSON() ([]byte, error) {
 	})
 }
 
+type virtioNetForMarshalling struct {
+	VirtioNet
+	MacAddress string `json:"macAddress,omitempty"`
+}
+
 func (dev *VirtioNet) MarshalJSON() ([]byte, error) {
 	type devWithKind struct {
 		jsonKind
-		VirtioNet
+		virtioNetForMarshalling
 	}
 	return json.Marshal(devWithKind{
-		jsonKind:  kind(vfNet),
-		VirtioNet: *dev,
+		jsonKind: kind(vfNet),
+		virtioNetForMarshalling: virtioNetForMarshalling{
+			VirtioNet:  *dev,
+			MacAddress: dev.MacAddress.String(),
+		},
 	})
 }
 
@@ -258,6 +318,17 @@ func (dev *VirtioFs) MarshalJSON() ([]byte, error) {
 	})
 }
 
+func (dev *NVMExpressController) MarshalJSON() ([]byte, error) {
+	type devWithKind struct {
+		jsonKind
+		NVMExpressController
+	}
+	return json.Marshal(devWithKind{
+		jsonKind:             kind(nvme),
+		NVMExpressController: *dev,
+	})
+}
+
 func (dev *RosettaShare) MarshalJSON() ([]byte, error) {
 	type devWithKind struct {
 		jsonKind
@@ -277,6 +348,17 @@ func (dev *VirtioRng) MarshalJSON() ([]byte, error) {
 	return json.Marshal(devWithKind{
 		jsonKind:  kind(vfRng),
 		VirtioRng: *dev,
+	})
+}
+
+func (dev *VirtioBalloon) MarshalJSON() ([]byte, error) {
+	type devWithKind struct {
+		jsonKind
+		VirtioBalloon
+	}
+	return json.Marshal(devWithKind{
+		jsonKind:      kind(vfBalloon),
+		VirtioBalloon: *dev,
 	})
 }
 
@@ -321,5 +403,27 @@ func (dev *USBMassStorage) MarshalJSON() ([]byte, error) {
 	return json.Marshal(devWithKind{
 		jsonKind:       kind(usbMassStorage),
 		USBMassStorage: *dev,
+	})
+}
+
+func (ign *Ignition) MarshalJSON() ([]byte, error) {
+	type devWithKind struct {
+		jsonKind
+		Ignition
+	}
+	return json.Marshal(devWithKind{
+		jsonKind: kind(ignition),
+		Ignition: *ign,
+	})
+}
+
+func (dev *NetworkBlockDevice) MarshalJSON() ([]byte, error) {
+	type devWithKind struct {
+		jsonKind
+		NetworkBlockDevice
+	}
+	return json.Marshal(devWithKind{
+		jsonKind:           kind(vfNbd),
+		NetworkBlockDevice: *dev,
 	})
 }

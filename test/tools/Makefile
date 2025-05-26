@@ -12,6 +12,7 @@ vendor:
 	$(GO) mod tidy
 	$(GO) mod vendor
 	$(GO) mod verify
+	$(GO) mod edit -toolchain none
 
 .PHONY: clean
 clean:
@@ -19,23 +20,15 @@ clean:
 
 .PHONY: $(BUILDDIR)
 $(BUILDDIR): \
-	$(BUILDDIR)/goimports \
 	$(BUILDDIR)/go-md2man \
 	$(BUILDDIR)/git-validation \
-	$(BUILDDIR)/ginkgo \
 	$(BUILDDIR)/swagger
-
-$(BUILDDIR)/goimports: $(SOURCES)
-	$(GO_BUILD) -o $@ ./vendor/golang.org/x/tools/cmd/goimports
 
 $(BUILDDIR)/go-md2man: $(SOURCES)
 	$(GO_BUILD) -o $@ ./vendor/github.com/cpuguy83/go-md2man/v2
 
 $(BUILDDIR)/git-validation: $(SOURCES)
 	$(GO_BUILD) -o $@ ./vendor/github.com/vbatts/git-validation
-
-$(BUILDDIR)/ginkgo: $(SOURCES)
-	$(GO_BUILD) -o $@ ./vendor/github.com/onsi/ginkgo/v2/ginkgo
 
 $(BUILDDIR)/swagger: $(SOURCES)
 	$(GO_BUILD) -o $@ ./vendor/github.com/go-swagger/go-swagger/cmd/swagger

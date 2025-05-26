@@ -118,7 +118,6 @@ func logsFlags(cmd *cobra.Command) {
 	flags.BoolVarP(&logsOptions.Colors, "color", "", false, "Output the containers with different colors in the log.")
 	flags.BoolVarP(&logsOptions.Names, "names", "n", false, "Output the container name in the log")
 
-	flags.SetInterspersed(false)
 	_ = flags.MarkHidden("details")
 }
 
@@ -142,5 +141,5 @@ func logs(_ *cobra.Command, args []string) error {
 	}
 	logsOptions.StdoutWriter = os.Stdout
 	logsOptions.StderrWriter = os.Stderr
-	return registry.ContainerEngine().ContainerLogs(registry.GetContext(), args, logsOptions.ContainerLogsOptions)
+	return registry.ContainerEngine().ContainerLogs(registry.Context(), args, logsOptions.ContainerLogsOptions)
 }

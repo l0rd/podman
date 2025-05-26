@@ -11,7 +11,6 @@ Windows.
   - [Git and go](#git-and-go)
   - [Pandoc](#pandoc)
   - [.NET SDK](#net-sdk)
-  - [Visual Studio Build Tools](#visual-studio-build-tools)
   - [Virtualization Provider](#virtualization-provider)
     - [WSL](#wsl)
     - [Hyper-V](#hyper-v)
@@ -59,17 +58,19 @@ reloaded. This can also be manually changed by configuring the `PATH`:
 $env:Path += ";C:\Program Files\Go\bin\;C:\Program Files\Git\cmd\"
 ```
 
-### Pandoc
+### Pandoc (optional)
 
 [Pandoc](https://pandoc.org/) is used to generate Podman documentation. It is
-required for building the documentation and the
-[bundle installer](#build-the-installer). It can be avoided when building and
-testing the
-[Podman client for Windows](#build-and-test-the-podman-client-for-windows) or
-[the standalone `podman.msi` installer](#build-and-test-the-standalone-podmanmsi-file).
+used for building the documentation.
 Pandoc can be installed from https://pandoc.org/installing.html. When performing
 the Pandoc installation one, has to choose the option "Install for all users"
 (to put the binaries into "Program Files" directory).
+Alternatively, Podman documentation can be built using a container with the target
+`docs-using-podman` in the `winmake.ps1` script.
+
+```pwsh
+.\winmake docs-using-podman
+```
 
 ### .NET SDK
 
@@ -86,30 +87,6 @@ used too and can be installed using `dotnet install`:
 
 ```pwsh
 dotnet tool install --global wix
-```
-
-### Visual Studio Build Tools
-
-The installer includes a C program that checks the installation of the
-pre-required virtualization providers (WSL or Hyper-V). Building this program
-requires the
-[Microsoft C/C++ compiler](https://learn.microsoft.com/en-us/cpp/build/building-on-the-command-line?view=msvc-170) and the
-[PowerShell Module VSSetup](https://github.com/microsoft/vssetup.powershell):
-
-1. Download the Build Tools for Visual Studio 2022 installer
-```pwsh
-Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile "$env:TEMP\vs_BuildTools.exe"
-```
-2. Run the installer with the parameter to include the optional C/C++ Tools
-```pwsh
-& "$env:TEMP\vs_BuildTools.exe" --passive --wait `
-                      --add Microsoft.VisualStudio.Workload.VCTools `
-                      --includeRecommended `
-                      --remove Microsoft.VisualStudio.Component.VC.CMake.Project
-```
-3. Install the PowerShell Module VSSetup
-```pwsh
-Install-Module VSSetup
 ```
 
 ### Virtualization Provider
@@ -312,10 +289,9 @@ To learn how to use the Podman client, refer to its
 ## Build and test the Podman Windows installer
 
 The Podman Windows installer (e.g., `podman-5.1.0-dev-setup.exe`) is a bundle
-that includes an msi package (`podman.msi`) and installs the WSL kernel
-(`podman-wslkerninst.exe`). It's built using the
+that includes an msi package (`podman.msi`). It's built using the
 [WiX Toolset](https://wixtoolset.org/) and the
-[PanelSwWixExtension](https://github.com/nirbar/PanelSwWixExtension/tree/wix3-v3.11.1.353)
+[PanelSwWixExtension](https://github.com/nirbar/PanelSwWixExtension/tree/master5)
 WiX extension. The source code is in the folder `contrib\win-installer`.
 
 ### Build the Windows installer
@@ -326,7 +302,7 @@ To build the installation bundle, run the following command:
 .\winmake.ps1 installer
 ```
 
-:information_source: making `podman-remote`, `win-gvproxy`, and `docs` is
+:information_source: making `podman-remote`, `win-gvproxy`, and `docs` (or `docs-using-podman`) is
 required before running this command.
 
 Locate the installer in the `contrib\win-installer` folder (relative to checkout
@@ -334,9 +310,6 @@ root) with a name like `podman-5.2.0-dev-setup.exe`.
 
 The `installer` target of `winmake.ps1` runs the script
 `contrib\win-installer\build.ps1` that, in turns, executes:
-
-- `build-hooks.bat`: builds `podman-wslkerninst.exe` (WSL kernel installer) and
-  `podman-msihooks.dll` (helper that checks if WSL and Hyper-V are installed).
 - `dotnet build podman.wixproj`: builds `podman.msi` from the WiX source files `podman.wxs`,
   `pages.wxs`, `podman-ui.wxs` and `welcome-install-dlg.wxs`.
 - `dotnet build podman-setup.wixproj`: builds `podman-setup.exe` file from
@@ -356,15 +329,29 @@ which include detailed installation information, in the current directory.
 
 Run it in `quiet` mode to automate the installation and avoid interacting with
 the GUI. Open the terminal **as an administrator**, add the `/quiet` option, and
-set the bundle variables `MachineProvider` (`wsl` or `hyperv`), `WSLCheckbox`
-(`1` to install WSL as part of the installation, `0` otherwise), and
-`HyperVCheckbox` (`1` to install Hyper-V as part of the installation, `0`
-otherwise):
+set the bundle variable `MachineProvider` (`wsl` or `hyperv`):
 
 ```pwsh
 contrib\win-installer\podman-5.1.0-dev-setup.exe /install `
                       /log podman-setup.log /quiet `
-                      MachineProvider=wsl WSLCheckbox=0 HyperVCheckbox=0
+                      MachineProvider=wsl
+```
+
+:information_source: If uninstallation fails, the installer may end up in an
+inconsistent state. Podman results as uninstalled, but some install packages are
+still tracked in the Windows registry and will affect further tentative to
+re-install Podman. When this is the case, trying to re-install Podman results in
+the installer returning zero (success) but no action is executed. The trailing
+packages `GID` can be found in installation logs:
+
+```
+Detected related package: {<GID>}
+```
+
+To fix this problem remove the related packages:
+
+```pwsh
+msiexec /x "{<GID>}"
 ```
 
 #### Run the Windows installer automated tests
@@ -373,7 +360,7 @@ The following command executes a number of tests of the windows installer. Runni
 it requires an administrator terminal.
 
 ```pwsh
-.\winmake.ps1 installertest
+.\winmake.ps1 installertest [wsl|hyperv]
 ```
 
 ### Build and test the standalone `podman.msi` file
@@ -401,13 +388,11 @@ msiexec /package contrib\win-installer\en-US\podman.msi /l*v podman-msi.log
 ```
 
 To run it in quiet, non-interactive mode, open the terminal **as an
-administrator**, add the `/quiet` option, and set the MSI properties
-`MACHINE_PROVIDER` (`wsl` or `hyperv`), `WITH_WSL` (`1` to install WSL as part
-of the installation, `0` otherwise) and `WITH_HYPERV` (`1` to install Hyper-V as
-part of the installation, `0` otherwise):
+administrator**, add the `/quiet` option, and set the MSI property
+`MACHINE_PROVIDER` (`wsl` or `hyperv`):
 
 ```pwsh
-msiexec /package contrib\win-installer\en-US\podman.msi /l*v podman-msi.log /quiet MACHINE_PROVIDER=wsl WITH_WSL=0 WITH_HYPERV=0
+msiexec /package contrib\win-installer\en-US\podman.msi /l*v podman-msi.log /quiet MACHINE_PROVIDER=wsl
 ```
 
 :information_source: `podman.msi` GUI dialogs, defined in the file
@@ -443,7 +428,12 @@ $env:PATH | Select-String -Pattern "Podman"
 
 :information_source: Podman CI uses script
 `contrib\cirrus\win-installer-main.ps1`. Use it locally, too, to build and test
-the installer.
+the installer:
+
+```pwsh
+$ENV:CONTAINERS_MACHINE_PROVIDER='wsl'; .\contrib\cirrus\win-installer-main.ps1
+$ENV:CONTAINERS_MACHINE_PROVIDER='hyperv'; .\contrib\cirrus\win-installer-main.ps1
+```
 
 ### Uninstall and clean-up
 
@@ -502,7 +492,13 @@ tools:
   [`.pre-commit-config.yaml`](.pre-commit-config.yaml)
 
 :information_source: Install [golangci-lint](https://golangci-lint.run) and
-[pre-commit](https://pre-commit.com) to run `winmake.ps1 lint`.
+[pre-commit](https://pre-commit.com) to run `winmake.ps1 lint`:
+    ```pwsh
+    winget install -e golangci-lint.golangci-lint
+    winget install -e Python.Python.3.13
+    pip install pre-commit
+    ```
+
 
 ### winmake validatepr
 
@@ -513,5 +509,6 @@ MacOS and Windows and then performs the same checks as the `lint` target plus
 many more.
 
 :information_source: Create and start a Podman machine before running
-`winmake.ps1 lint`. Configure the Podman machine with at least 4GB of memory:
+`winmake.ps1 validatepr`. Configure the Podman machine with at least 4GB of
+memory:
 `podman machine init -m 4096`.

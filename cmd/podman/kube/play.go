@@ -98,6 +98,7 @@ func init() {
 func playFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
 	flags.SetNormalizeFunc(utils.AliasFlags)
+	podmanConfig := registry.PodmanConfig()
 
 	annotationFlagName := "annotation"
 	flags.StringArrayVar(
@@ -139,7 +140,8 @@ func playFlags(cmd *cobra.Command) {
 	)
 	_ = cmd.RegisterFlagCompletionFunc(usernsFlagName, common.AutocompleteUserNamespace)
 
-	flags.BoolVar(&playOptions.NoHosts, "no-hosts", false, "Do not create /etc/hosts within the pod's containers, instead use the version from the image")
+	flags.BoolVar(&playOptions.NoHostname, "no-hostname", false, "Do not create /etc/hostname within the container, instead use the version from the image")
+	flags.BoolVar(&playOptions.NoHosts, "no-hosts", podmanConfig.ContainersConfDefaultsRO.Containers.NoHosts, "Do not create /etc/hosts within the pod's containers, instead use the version from the image")
 	flags.BoolVarP(&playOptions.Quiet, "quiet", "q", false, "Suppress output information when pulling images")
 	flags.BoolVar(&playOptions.TLSVerifyCLI, "tls-verify", true, "Require HTTPS and verify certificates when contacting registries")
 	flags.BoolVar(&playOptions.StartCLI, "start", true, "Start the pod after creating it")
@@ -396,7 +398,7 @@ func teardown(body io.Reader, options entities.PlayKubeDownOptions) error {
 		volRmErrors   utils.OutputErrors
 		secRmErrors   utils.OutputErrors
 	)
-	reports, err := registry.ContainerEngine().PlayKubeDown(registry.GetContext(), body, options)
+	reports, err := registry.ContainerEngine().PlayKubeDown(registry.Context(), body, options)
 	if err != nil {
 		return err
 	}
@@ -463,7 +465,7 @@ func teardown(body io.Reader, options entities.PlayKubeDownOptions) error {
 }
 
 func kubeplay(body io.Reader) error {
-	report, err := registry.ContainerEngine().PlayKube(registry.GetContext(), body, playOptions.PlayKubeOptions)
+	report, err := registry.ContainerEngine().PlayKube(registry.Context(), body, playOptions.PlayKubeOptions)
 	if err != nil {
 		return err
 	}
@@ -476,7 +478,7 @@ func kubeplay(body io.Reader) error {
 
 	// If --wait=true, we need wait for the service container to exit so that we know that the pod has exited and we can clean up
 	if playOptions.Wait {
-		_, err := registry.ContainerEngine().ContainerWait(registry.GetContext(), []string{report.ServiceContainerID}, entities.WaitOptions{})
+		_, err := registry.ContainerEngine().ContainerWait(registry.Context(), []string{report.ServiceContainerID}, entities.WaitOptions{})
 		if err != nil {
 			return err
 		}

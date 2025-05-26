@@ -1,9 +1,13 @@
 package common
 
 import (
+	"errors"
+	"time"
+
 	"github.com/containers/common/pkg/auth"
 	"github.com/containers/common/pkg/completion"
 	commonFlag "github.com/containers/common/pkg/flag"
+	"github.com/containers/image/v5/manifest"
 	"github.com/containers/podman/v5/cmd/podman/registry"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/domain/entities"
@@ -114,21 +118,6 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		)
 		_ = cmd.RegisterFlagCompletionFunc(envMergeFlagName, completion.AutocompleteNone)
 
-		envFlagName := "env"
-		createFlags.StringArrayP(
-			envFlagName, "e", Env(),
-			"Set environment variables in container",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(envFlagName, completion.AutocompleteNone)
-
-		unsetenvFlagName := "unsetenv"
-		createFlags.StringArrayVar(
-			&cf.UnsetEnv,
-			unsetenvFlagName, []string{},
-			"Unset environment default variables in container",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(unsetenvFlagName, completion.AutocompleteNone)
-
 		createFlags.BoolVar(
 			&cf.UnsetEnvAll,
 			"unsetenv-all", false,
@@ -167,78 +156,6 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 			"Add additional groups to the primary container process. 'keep-groups' allows container processes to use supplementary groups.",
 		)
 		_ = cmd.RegisterFlagCompletionFunc(groupAddFlagName, completion.AutocompleteNone)
-
-		healthCmdFlagName := "health-cmd"
-		createFlags.StringVar(
-			&cf.HealthCmd,
-			healthCmdFlagName, "",
-			"set a healthcheck command for the container ('none' disables the existing healthcheck)",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthCmdFlagName, completion.AutocompleteNone)
-
-		healthIntervalFlagName := "health-interval"
-		createFlags.StringVar(
-			&cf.HealthInterval,
-			healthIntervalFlagName, define.DefaultHealthCheckInterval,
-			"set an interval for the healthcheck (a value of disable results in no automatic timer setup)",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthIntervalFlagName, completion.AutocompleteNone)
-
-		healthLogDestinationFlagName := "health-log-destination"
-		createFlags.StringVar(
-			&cf.HealthLogDestination,
-			healthLogDestinationFlagName, define.DefaultHealthCheckLocalDestination,
-			"set the destination of the HealthCheck log. Directory path, local or events_logger (local use container state file)",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthLogDestinationFlagName, completion.AutocompleteNone)
-
-		healthMaxLogCountFlagName := "health-max-log-count"
-		createFlags.UintVar(
-			&cf.HealthMaxLogCount,
-			healthMaxLogCountFlagName, define.DefaultHealthMaxLogCount,
-			"set maximum number of attempts in the HealthCheck log file. ('0' value means an infinite number of attempts in the log file)",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthMaxLogCountFlagName, completion.AutocompleteNone)
-
-		healthMaxLogSizeFlagName := "health-max-log-size"
-		createFlags.UintVar(
-			&cf.HealthMaxLogSize,
-			healthMaxLogSizeFlagName, define.DefaultHealthMaxLogSize,
-			"set maximum length in characters of stored HealthCheck log. ('0' value means an infinite log length)",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthMaxLogSizeFlagName, completion.AutocompleteNone)
-
-		healthRetriesFlagName := "health-retries"
-		createFlags.UintVar(
-			&cf.HealthRetries,
-			healthRetriesFlagName, define.DefaultHealthCheckRetries,
-			"the number of retries allowed before a healthcheck is considered to be unhealthy",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthRetriesFlagName, completion.AutocompleteNone)
-
-		healthStartPeriodFlagName := "health-start-period"
-		createFlags.StringVar(
-			&cf.HealthStartPeriod,
-			healthStartPeriodFlagName, define.DefaultHealthCheckStartPeriod,
-			"the initialization time needed for a container to bootstrap",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthStartPeriodFlagName, completion.AutocompleteNone)
-
-		healthTimeoutFlagName := "health-timeout"
-		createFlags.StringVar(
-			&cf.HealthTimeout,
-			healthTimeoutFlagName, define.DefaultHealthCheckTimeout,
-			"the maximum time allowed to complete the healthcheck before an interval is considered failed",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthTimeoutFlagName, completion.AutocompleteNone)
-
-		healthOnFailureFlagName := "health-on-failure"
-		createFlags.StringVar(
-			&cf.HealthOnFailure,
-			healthOnFailureFlagName, "none",
-			"action to take once the container turns unhealthy",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(healthOnFailureFlagName, AutocompleteHealthOnFailure)
 
 		createFlags.BoolVar(
 			&cf.HTTPProxy,
@@ -279,7 +196,7 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		createFlags.BoolVarP(
 			&cf.Interactive,
 			"interactive", "i", false,
-			"Keep STDIN open even if not attached",
+			"Make STDIN available to the contained process",
 		)
 		ipcFlagName := "ipc"
 		createFlags.String(
@@ -311,11 +228,6 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		)
 		_ = cmd.RegisterFlagCompletionFunc(logOptFlagName, AutocompleteLogOpt)
 
-		createFlags.BoolVar(
-			&cf.NoHealthCheck,
-			"no-healthcheck", false,
-			"Disable healthchecks on container",
-		)
 		createFlags.BoolVar(
 			&cf.OOMKillDisable,
 			"oom-kill-disable", false,
@@ -451,46 +363,6 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 			"Add secret to container",
 		)
 		_ = cmd.RegisterFlagCompletionFunc(secretFlagName, AutocompleteSecrets)
-
-		startupHCCmdFlagName := "health-startup-cmd"
-		createFlags.StringVar(
-			&cf.StartupHCCmd,
-			startupHCCmdFlagName, "",
-			"Set a startup healthcheck command for the container",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(startupHCCmdFlagName, completion.AutocompleteNone)
-
-		startupHCIntervalFlagName := "health-startup-interval"
-		createFlags.StringVar(
-			&cf.StartupHCInterval,
-			startupHCIntervalFlagName, define.DefaultHealthCheckInterval,
-			"Set an interval for the startup healthcheck",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(startupHCIntervalFlagName, completion.AutocompleteNone)
-
-		startupHCRetriesFlagName := "health-startup-retries"
-		createFlags.UintVar(
-			&cf.StartupHCRetries,
-			startupHCRetriesFlagName, 0,
-			"Set the maximum number of retries before the startup healthcheck will restart the container",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(startupHCRetriesFlagName, completion.AutocompleteNone)
-
-		startupHCSuccessesFlagName := "health-startup-success"
-		createFlags.UintVar(
-			&cf.StartupHCSuccesses,
-			startupHCSuccessesFlagName, 0,
-			"Set the number of consecutive successes before the startup healthcheck is marked as successful and the normal healthcheck begins (0 indicates any success will start the regular healthcheck)",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(startupHCSuccessesFlagName, completion.AutocompleteNone)
-
-		startupHCTimeoutFlagName := "health-startup-timeout"
-		createFlags.StringVar(
-			&cf.StartupHCTimeout,
-			startupHCTimeoutFlagName, define.DefaultHealthCheckTimeout,
-			"Set the maximum amount of time that the startup healthcheck may take before it is considered failed",
-		)
-		_ = cmd.RegisterFlagCompletionFunc(startupHCTimeoutFlagName, completion.AutocompleteNone)
 
 		stopSignalFlagName := "stop-signal"
 		createFlags.StringVar(
@@ -665,6 +537,155 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 			`If a container with the same name exists, replace it`,
 		)
 	}
+	if mode == entities.CreateMode || mode == entities.UpdateMode {
+		createFlags.BoolVar(
+			&cf.NoHealthCheck,
+			"no-healthcheck", false,
+			"Disable healthchecks on container",
+		)
+
+		envFlagName := "env"
+		createFlags.StringArrayP(
+			envFlagName, "e", Env(),
+			"Set environment variables in container",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(envFlagName, completion.AutocompleteNone)
+
+		unsetenvFlagName := "unsetenv"
+		createFlags.StringArrayVar(
+			&cf.UnsetEnv,
+			unsetenvFlagName, []string{},
+			"Unset environment default variables in container",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(unsetenvFlagName, completion.AutocompleteNone)
+
+		healthCmdFlagName := "health-cmd"
+		createFlags.StringVar(
+			&cf.HealthCmd,
+			healthCmdFlagName, "",
+			"set a healthcheck command for the container ('none' disables the existing healthcheck)",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthCmdFlagName, completion.AutocompleteNone)
+
+		info := ""
+		if mode == entities.UpdateMode {
+			info = "Changing this setting resets timer."
+		}
+		healthIntervalFlagName := "health-interval"
+		createFlags.StringVar(
+			&cf.HealthInterval,
+			healthIntervalFlagName, define.DefaultHealthCheckInterval,
+			"set an interval for the healthcheck. (a value of disable results in no automatic timer setup) "+info,
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthIntervalFlagName, completion.AutocompleteNone)
+
+		warning := ""
+		if mode == entities.UpdateMode {
+			warning = "Warning: Changing this setting may cause the loss of previous logs!"
+		}
+		healthLogDestinationFlagName := "health-log-destination"
+		createFlags.StringVar(
+			&cf.HealthLogDestination,
+			healthLogDestinationFlagName, define.DefaultHealthCheckLocalDestination,
+			"set the destination of the HealthCheck log. Directory path, local or events_logger (local use container state file) "+warning,
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthLogDestinationFlagName, completion.AutocompleteNone)
+
+		healthMaxLogCountFlagName := "health-max-log-count"
+		createFlags.UintVar(
+			&cf.HealthMaxLogCount,
+			healthMaxLogCountFlagName, define.DefaultHealthMaxLogCount,
+			"set maximum number of attempts in the HealthCheck log file. ('0' value means an infinite number of attempts in the log file)",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthMaxLogCountFlagName, completion.AutocompleteNone)
+
+		healthMaxLogSizeFlagName := "health-max-log-size"
+		createFlags.UintVar(
+			&cf.HealthMaxLogSize,
+			healthMaxLogSizeFlagName, define.DefaultHealthMaxLogSize,
+			"set maximum length in characters of stored HealthCheck log. ('0' value means an infinite log length)",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthMaxLogSizeFlagName, completion.AutocompleteNone)
+
+		healthRetriesFlagName := "health-retries"
+		createFlags.UintVar(
+			&cf.HealthRetries,
+			healthRetriesFlagName, define.DefaultHealthCheckRetries,
+			"the number of retries allowed before a healthcheck is considered to be unhealthy",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthRetriesFlagName, completion.AutocompleteNone)
+
+		healthStartPeriodFlagName := "health-start-period"
+		createFlags.StringVar(
+			&cf.HealthStartPeriod,
+			healthStartPeriodFlagName, define.DefaultHealthCheckStartPeriod,
+			"the initialization time needed for a container to bootstrap",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthStartPeriodFlagName, completion.AutocompleteNone)
+
+		healthTimeoutFlagName := "health-timeout"
+		createFlags.StringVar(
+			&cf.HealthTimeout,
+			healthTimeoutFlagName, define.DefaultHealthCheckTimeout,
+			"the maximum time allowed to complete the healthcheck before an interval is considered failed and SIGKILL is sent to the healthcheck process",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthTimeoutFlagName, completion.AutocompleteNone)
+
+		healthOnFailureFlagName := "health-on-failure"
+		createFlags.StringVar(
+			&cf.HealthOnFailure,
+			healthOnFailureFlagName, "none",
+			"action to take once the container turns unhealthy",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(healthOnFailureFlagName, AutocompleteHealthOnFailure)
+
+		// Startup HealthCheck
+
+		startupHCCmdFlagName := "health-startup-cmd"
+		createFlags.StringVar(
+			&cf.StartupHCCmd,
+			startupHCCmdFlagName, "",
+			"Set a startup healthcheck command for the container",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(startupHCCmdFlagName, completion.AutocompleteNone)
+
+		info = ""
+		if mode == entities.UpdateMode {
+			info = "Changing this setting resets the timer, depending on the state of the container."
+		}
+		startupHCIntervalFlagName := "health-startup-interval"
+		createFlags.StringVar(
+			&cf.StartupHCInterval,
+			startupHCIntervalFlagName, define.DefaultHealthCheckInterval,
+			"Set an interval for the startup healthcheck. "+info,
+		)
+		_ = cmd.RegisterFlagCompletionFunc(startupHCIntervalFlagName, completion.AutocompleteNone)
+
+		startupHCRetriesFlagName := "health-startup-retries"
+		createFlags.UintVar(
+			&cf.StartupHCRetries,
+			startupHCRetriesFlagName, 0,
+			"Set the maximum number of retries before the startup healthcheck will restart the container",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(startupHCRetriesFlagName, completion.AutocompleteNone)
+
+		startupHCSuccessesFlagName := "health-startup-success"
+		createFlags.UintVar(
+			&cf.StartupHCSuccesses,
+			startupHCSuccessesFlagName, 0,
+			"Set the number of consecutive successes before the startup healthcheck is marked as successful and the normal healthcheck begins (0 indicates any success will start the regular healthcheck)",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(startupHCSuccessesFlagName, completion.AutocompleteNone)
+
+		startupHCTimeoutFlagName := "health-startup-timeout"
+		createFlags.StringVar(
+			&cf.StartupHCTimeout,
+			startupHCTimeoutFlagName, define.DefaultHealthCheckTimeout,
+			"Set the maximum amount of time that the startup healthcheck may take before it is considered failed",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(startupHCTimeoutFlagName, completion.AutocompleteNone)
+	}
+
 	// Restart is allowed for created, updated, and infra ctr
 	if mode == entities.InfraMode || mode == entities.CreateMode || mode == entities.UpdateMode {
 		restartFlagName := "restart"
@@ -1035,4 +1056,44 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		"Block IO weight (relative device weight, format: `DEVICE_NAME:WEIGHT`)",
 	)
 	_ = cmd.RegisterFlagCompletionFunc(blkioWeightDeviceFlagName, completion.AutocompleteDefault)
+}
+
+func GetHealthCheckOverrideConfig(cmd *cobra.Command, vals *entities.ContainerCreateOptions) (*manifest.Schema2HealthConfig, error) {
+	healthcheck := manifest.Schema2HealthConfig{}
+
+	if cmd.Flags().Changed("health-interval") {
+		if vals.HealthInterval == "disable" {
+			vals.HealthInterval = "-1s"
+		}
+		hct, err := time.ParseDuration(vals.HealthInterval)
+		if err != nil {
+			return nil, err
+		}
+		healthcheck.Interval = hct
+	}
+	if cmd.Flags().Changed("health-retries") {
+		healthcheck.Retries = int(vals.HealthRetries)
+	}
+	if cmd.Flags().Changed("health-timeout") {
+		hct, err := time.ParseDuration(vals.HealthTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if hct < time.Duration(1) {
+			return nil, errors.New("healthcheck-timeout must be at least 1 second")
+		}
+		healthcheck.Timeout = hct
+	}
+	if cmd.Flags().Changed("health-start-period") {
+		hct, err := time.ParseDuration(vals.HealthStartPeriod)
+		if err != nil {
+			return nil, err
+		}
+		if hct < time.Duration(0) {
+			return nil, errors.New("healthcheck-start-period must be 0 seconds or greater")
+		}
+		healthcheck.StartPeriod = hct
+	}
+
+	return &healthcheck, nil
 }

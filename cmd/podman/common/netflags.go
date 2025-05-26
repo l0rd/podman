@@ -26,6 +26,13 @@ func DefineNetFlags(cmd *cobra.Command) {
 	)
 	_ = cmd.RegisterFlagCompletionFunc(addHostFlagName, completion.AutocompleteNone)
 
+	hostsFileFlagName := "hosts-file"
+	netFlags.String(
+		hostsFileFlagName, "",
+		`Base file to create the /etc/hosts file inside the container, or one of the special values. ("image"|"none")`,
+	)
+	_ = cmd.RegisterFlagCompletionFunc(hostsFileFlagName, AutocompleteHostsFile)
+
 	dnsFlagName := "dns"
 	netFlags.StringSlice(
 		dnsFlagName, podmanConfig.ContainersConf.DNSServers(),
@@ -89,6 +96,10 @@ func DefineNetFlags(cmd *cobra.Command) {
 	_ = cmd.RegisterFlagCompletionFunc(publishFlagName, completion.AutocompleteNone)
 
 	netFlags.Bool(
+		"no-hostname", false, "Do not create /etc/hostname within the container, instead use the version from the image",
+	)
+
+	netFlags.Bool(
 		"no-hosts", podmanConfig.ContainersConfDefaultsRO.Containers.NoHosts,
 		"Do not create /etc/hosts within the container, instead use the version from the image",
 	)
@@ -113,6 +124,13 @@ func NetFlagsToNetOptions(opts *entities.NetOptions, flags pflag.FlagSet) (*enti
 			if _, err := parse.ValidateExtraHost(host); err != nil {
 				return nil, err
 			}
+		}
+	}
+
+	if flags.Changed("hosts-file") {
+		opts.HostsFile, err = flags.GetString("hosts-file")
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -176,6 +194,11 @@ func NetFlagsToNetOptions(opts *entities.NetOptions, flags pflag.FlagSet) (*enti
 				return nil, err
 			}
 		}
+	}
+
+	opts.NoHostname, err = flags.GetBool("no-hostname")
+	if err != nil {
+		return nil, err
 	}
 
 	opts.NoHosts, err = flags.GetBool("no-hosts")

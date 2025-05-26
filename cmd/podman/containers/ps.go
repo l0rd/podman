@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	tm "github.com/buger/goterm"
 	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/report"
@@ -173,7 +172,7 @@ func quietOut(responses []entities.ListContainer) {
 }
 
 func getResponses() ([]entities.ListContainer, error) {
-	responses, err := registry.ContainerEngine().ContainerList(registry.GetContext(), listOpts)
+	responses, err := registry.ContainerEngine().ContainerList(registry.Context(), listOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -267,9 +266,7 @@ func ps(cmd *cobra.Command, _ []string) error {
 				responses = append(responses, psReporter{r})
 			}
 
-			tm.Clear()
-			tm.MoveCursor(1, 1)
-			tm.Flush()
+			common.ClearScreen()
 
 			if err := headers(); err != nil {
 				return err
@@ -343,7 +340,7 @@ func (l psReporter) ImageID() string {
 	return l.ListContainer.ImageID
 }
 
-// Labels returns a map of the pod's labels
+// Label returns a map of the pod's labels
 func (l psReporter) Label(name string) string {
 	return l.ListContainer.Labels[name]
 }

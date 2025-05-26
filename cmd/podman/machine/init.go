@@ -62,6 +62,10 @@ func init() {
 	)
 	_ = initCmd.RegisterFlagCompletionFunc(cpusFlagName, completion.AutocompleteNone)
 
+	runPlaybookFlagName := "playbook"
+	flags.StringVar(&initOpts.PlaybookPath, runPlaybookFlagName, "", "Run an Ansible playbook after first boot")
+	_ = initCmd.RegisterFlagCompletionFunc(runPlaybookFlagName, completion.AutocompleteDefault)
+
 	diskSizeFlagName := "disk-size"
 	flags.Uint64Var(
 		&initOpts.DiskSize,
@@ -78,6 +82,14 @@ func init() {
 		"Memory in MiB",
 	)
 	_ = initCmd.RegisterFlagCompletionFunc(memoryFlagName, completion.AutocompleteNone)
+
+	swapFlagName := "swap"
+	flags.Uint64VarP(
+		&initOpts.Swap,
+		swapFlagName, "s", 0,
+		"Swap in MiB",
+	)
+	_ = initCmd.RegisterFlagCompletionFunc(swapFlagName, completion.AutocompleteNone)
 
 	flags.BoolVar(
 		&now,
@@ -245,7 +257,7 @@ func checkMaxMemory(newMem strongunits.MiB) error {
 		return err
 	}
 	if total := strongunits.B(memStat.Total); strongunits.B(memStat.Total) < newMem.ToBytes() {
-		return fmt.Errorf("requested amount of memory (%d MB) greater than total system memory (%d MB)", newMem, total)
+		return fmt.Errorf("requested amount of memory (%d MB) greater than total system memory (%d MB)", newMem, strongunits.ToMib(total))
 	}
 	return nil
 }

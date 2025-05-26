@@ -50,11 +50,6 @@ type SetupOptions struct {
 	ExtraOptions []string
 }
 
-// Setup2 alias for Setup()
-func Setup2(opts *SetupOptions) (*SetupResult, error) {
-	return Setup(opts)
-}
-
 // Setup start the pasta process for the given netns.
 // The pasta binary is looked up in the HelperBinariesDir and $PATH.
 // Note that there is no need for any special cleanup logic, the pasta
@@ -115,13 +110,26 @@ func Setup(opts *SetupOptions) (*SetupResult, error) {
 			return err
 		}
 		for _, addr := range addrs {
-			// make sure to skip localhost and other special addresses
-			if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.IsGlobalUnicast() {
-				result.IPAddresses = append(result.IPAddresses, ipnet.IP)
-				if !ipv4 && util.IsIPv4(ipnet.IP) {
+			// make sure to skip loopback and multicast addresses
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsMulticast() {
+				if util.IsIPv4(ipnet.IP) {
+					result.IPAddresses = append(result.IPAddresses, ipnet.IP)
 					ipv4 = true
-				}
-				if !ipv6 && util.IsIPv6(ipnet.IP) {
+				} else if !ipnet.IP.IsLinkLocalUnicast() {
+					// Else must be ipv6.
+					// We shouldn't resolve hosts.containers.internal to IPv6
+					// link-local addresses, for two reasons:
+					// 1. even if IPv6 is disabled in pasta (--ipv4-only), the
+					//    kernel will configure an IPv6 link-local address in the
+					//    container, but that doesn't mean that IPv6 connectivity
+					//    is actually working
+					// 2. link-local addresses need to be suffixed by the zone
+					//    (interface) to be of any use, but we can't do it here
+					//
+					// Thus, don't include IPv6 link-local addresses in
+					// IPAddresses: Podman uses them for /etc/hosts entries, and
+					// those need to be functional.
+					result.IPAddresses = append(result.IPAddresses, ipnet.IP)
 					ipv6 = true
 				}
 			}

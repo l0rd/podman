@@ -227,6 +227,10 @@ func (t *quadletTestcase) assertKeyContains(args []string, unit *parser.UnitFile
 	return ok && strings.Contains(realValue, value)
 }
 
+func (t *quadletTestcase) assertKeyNotContains(args []string, unit *parser.UnitFile) bool {
+	return !t.assertKeyContains(args, unit)
+}
+
 func (t *quadletTestcase) assertPodmanArgs(args []string, unit *parser.UnitFile, key string, allowRegex, globalOnly bool) bool {
 	podmanArgs, _ := unit.LookupLastArgs("Service", key)
 	if globalOnly {
@@ -473,6 +477,30 @@ func (t *quadletTestcase) assertStopPostPodmanArgsKeyValRegex(args []string, uni
 	return t.assertPodmanArgsKeyVal(args, unit, "ExecStopPost", true, false)
 }
 
+func (t *quadletTestcase) assertReloadPodmanArgs(args []string, unit *parser.UnitFile) bool {
+	return t.assertPodmanArgs(args, unit, "ExecReload", false, false)
+}
+
+func (t *quadletTestcase) assertReloadPodmanGlobalArgs(args []string, unit *parser.UnitFile) bool {
+	return t.assertPodmanArgs(args, unit, "ExecReload", false, true)
+}
+
+func (t *quadletTestcase) assertReloadPodmanFinalArgs(args []string, unit *parser.UnitFile) bool {
+	return t.assertPodmanFinalArgs(args, unit, "ExecReload")
+}
+
+func (t *quadletTestcase) assertReloadPodmanFinalArgsRegex(args []string, unit *parser.UnitFile) bool {
+	return t.assertPodmanFinalArgsRegex(args, unit, "ExecReload")
+}
+
+func (t *quadletTestcase) assertReloadPodmanArgsKeyVal(args []string, unit *parser.UnitFile) bool {
+	return t.assertPodmanArgsKeyVal(args, unit, "ExecReload", false, false)
+}
+
+func (t *quadletTestcase) assertReloadPodmanArgsKeyValRegex(args []string, unit *parser.UnitFile) bool {
+	return t.assertPodmanArgsKeyVal(args, unit, "ExecReload", true, false)
+}
+
 func (t *quadletTestcase) assertSymlink(args []string, unit *parser.UnitFile) bool {
 	Expect(args).To(HaveLen(2))
 	symlink := args[0]
@@ -516,6 +544,8 @@ func (t *quadletTestcase) doAssert(check []string, unit *parser.UnitFile, sessio
 		ok = t.assertKeyIsRegex(args, unit)
 	case "assert-key-contains":
 		ok = t.assertKeyContains(args, unit)
+	case "assert-key-not-contains":
+		ok = t.assertKeyNotContains(args, unit)
 	case "assert-last-key-is-regex":
 		ok = t.assertLastKeyIsRegex(args, unit)
 	case "assert-podman-args":
@@ -584,6 +614,18 @@ func (t *quadletTestcase) doAssert(check []string, unit *parser.UnitFile, sessio
 		ok = t.assertStopPostPodmanArgsKeyVal(args, unit)
 	case "assert-podman-stop-post-args-key-val-regex":
 		ok = t.assertStopPostPodmanArgsKeyValRegex(args, unit)
+	case "assert-podman-reload-args":
+		ok = t.assertReloadPodmanArgs(args, unit)
+	case "assert-podman-reload-global-args":
+		ok = t.assertReloadPodmanGlobalArgs(args, unit)
+	case "assert-podman-reload-final-args":
+		ok = t.assertReloadPodmanFinalArgs(args, unit)
+	case "assert-podman-reload-final-args-regex":
+		ok = t.assertReloadPodmanFinalArgsRegex(args, unit)
+	case "assert-podman-reload-args-key-val":
+		ok = t.assertReloadPodmanArgsKeyVal(args, unit)
+	case "assert-podman-reload-args-key-val-regex":
+		ok = t.assertReloadPodmanArgsKeyValRegex(args, unit)
 
 	default:
 		return fmt.Errorf("Unsupported assertion %s", op)
@@ -870,6 +912,7 @@ BOGUS=foo
 		Entry("logdriver.container", "logdriver.container"),
 		Entry("logopt.container", "logopt.container"),
 		Entry("mask.container", "mask.container"),
+		Entry("memory.container", "memory.container"),
 		Entry("name.container", "name.container"),
 		Entry("nestedselinux.container", "nestedselinux.container"),
 		Entry("network.container", "network.container"),
@@ -918,6 +961,9 @@ BOGUS=foo
 		Entry("NetworkAlias", "network-alias.container"),
 		Entry("CgroupMode", "cgroups-mode.container"),
 		Entry("Container - No Default Dependencies", "no_deps.container"),
+		Entry("retry.container", "retry.container"),
+		Entry("reloadcmd.container", "reloadcmd.container"),
+		Entry("reloadsignal.container", "reloadsignal.container"),
 
 		Entry("basic.volume", "basic.volume"),
 		Entry("device-copy.volume", "device-copy.volume"),
@@ -971,6 +1017,7 @@ BOGUS=foo
 		Entry("Network - subnet, gateway and range", "subnet-trio.network"),
 		Entry("Network - global args", "globalargs.network"),
 		Entry("Network - Containers Conf Modules", "containersconfmodule.network"),
+		Entry("Network - Delete on stop", "delete.network"),
 
 		Entry("Image - Basic", "basic.image"),
 		Entry("Image - Architecture", "arch.image"),
@@ -987,6 +1034,7 @@ BOGUS=foo
 		Entry("Image - Containers Conf Modules", "containersconfmodule.image"),
 		Entry("Image - Unit After Override", "unit-after-override.image"),
 		Entry("Image - No Default Dependencies", "no_deps.image"),
+		Entry("Image - Retry", "retry.image"),
 
 		Entry("Build - Basic", "basic.build"),
 		Entry("Build - Annotation Key", "annotation.build"),
@@ -1021,13 +1069,16 @@ BOGUS=foo
 		Entry("Build - TLSVerify Key", "tls-verify.build"),
 		Entry("Build - Variant Key", "variant.build"),
 		Entry("Build - No Default Dependencies", "no_deps.build"),
+		Entry("Build - Retry", "retry.build"),
 
 		Entry("Pod - Basic", "basic.pod"),
 		Entry("Pod - DNS", "dns.pod"),
 		Entry("Pod - DNS Option", "dns-option.pod"),
 		Entry("Pod - DNS Search", "dns-search.pod"),
 		Entry("Pod - Host", "host.pod"),
+		Entry("Pod - HostName", "hostname.pod"),
 		Entry("Pod - IP", "ip.pod"),
+		Entry("Pod - Label", "label.pod"),
 		Entry("Pod - Name", "name.pod"),
 		Entry("Pod - Network", "network.pod"),
 		Entry("Pod - PodmanArgs", "podmanargs.pod"),
@@ -1036,10 +1087,12 @@ BOGUS=foo
 		Entry("Pod - Remap auto2", "remap-auto2.pod"),
 		Entry("Pod - Remap keep-id", "remap-keep-id.pod"),
 		Entry("Pod - Remap manual", "remap-manual.pod"),
+		Entry("Pod - Shm Size", "shmsize.pod"),
 	)
 
 	DescribeTable("Running expected warning quadlet test case",
 		runWarningQuadletTestCase,
+		Entry("label-unsupported-escape.container", "label-unsupported-escape.container", "unsupported escape char"),
 		Entry("shortname.container", "shortname.container", "Warning: shortname.container specifies the image \"shortname\" which not a fully qualified image name. This is not ideal for performance and security reasons. See the podman-pull manpage discussion of short-name-aliases.conf for details."),
 	)
 
@@ -1051,6 +1104,8 @@ BOGUS=foo
 		Entry("pod.not-found.container", "pod.not-found.container", "converting \"pod.not-found.container\": quadlet pod unit not-found.pod does not exist"),
 		Entry("subidmapping-with-remap.container", "subidmapping-with-remap.container", "converting \"subidmapping-with-remap.container\": deprecated Remap keys are set along with explicit mapping keys"),
 		Entry("userns-with-remap.container", "userns-with-remap.container", "converting \"userns-with-remap.container\": deprecated Remap keys are set along with explicit mapping keys"),
+		Entry("reloadboth.container", "reloadboth.container", "converting \"reloadboth.container\": ReloadCmd and ReloadSignal are mutually exclusive but both are set"),
+		Entry("dependent.error.container", "dependent.error.container", "converting \"dependent.error.container\": unable to translate dependency for basic.container"),
 
 		Entry("image-no-image.volume", "image-no-image.volume", "converting \"image-no-image.volume\": the key Image is mandatory when using the image driver"),
 		Entry("Volume - Quadlet image (.build) not found", "build-not-found.quadlet.volume", "converting \"build-not-found.quadlet.volume\": requested Quadlet image not-found.build was not found"),
@@ -1068,6 +1123,7 @@ BOGUS=foo
 		Entry("Build - File Key relative no WD", "file-rel-no-wd.build", "converting \"file-rel-no-wd.build\": relative path in File key requires SetWorkingDirectory key to be set"),
 		Entry("Build - Neither WorkingDirectory nor File Key", "neither-workingdirectory-nor-file.build", "converting \"neither-workingdirectory-nor-file.build\": neither SetWorkingDirectory, nor File key specified"),
 		Entry("Build - No ImageTag Key", "no-imagetag.build", "converting \"no-imagetag.build\": no ImageTag key specified"),
+		Entry("emptyline.container", "emptyline.container", "converting \"emptyline.container\": no Image or Rootfs key specified"),
 	)
 
 	DescribeTable("Running success quadlet with ServiceName test case",
@@ -1094,7 +1150,7 @@ BOGUS=foo
 
 			runSuccessQuadletTestCase(fileName)
 		},
-		Entry("Container - Mount", "mount.container", []string{"basic.volume"}),
+		Entry("Container - Mount", "mount.container", []string{"basic.image", "basic.volume"}),
 		Entry("Container - Quadlet Network", "network.quadlet.container", []string{"basic.network"}),
 		Entry("Container - Quadlet Volume", "volume.container", []string{"basic.volume"}),
 		Entry("Container - Mount overriding service name", "mount.servicename.container", []string{"service-name.volume"}),
@@ -1103,25 +1159,121 @@ BOGUS=foo
 		Entry("Container - Quadlet build with multiple tags", "build.multiple-tags.container", []string{"multiple-tags.build"}),
 		Entry("Container - Reuse another container's network", "network.reuse.container", []string{"basic.container"}),
 		Entry("Container - Reuse another named container's network", "network.reuse.name.container", []string{"name.container"}),
+		Entry("Container - Reuse another container's network", "a.network.reuse.container", []string{"basic.container"}),
+		Entry("Container - Reuse another named container's network", "a.network.reuse.name.container", []string{"name.container"}),
+		Entry(
+			"Container - Dependency between quadlet units",
+			"dependent.container",
+			[]string{
+				"basic.build",
+				"basic.container",
+				"basic.image",
+				"basic.kube",
+				"basic.network",
+				"basic.pod",
+				"basic.volume",
+			},
+		),
 
 		Entry("Volume - Quadlet image (.build)", "build.quadlet.volume", []string{"basic.build"}),
 		Entry("Volume - Quadlet image (.image)", "image.quadlet.volume", []string{"basic.image"}),
 		Entry("Volume - Quadlet image (.build) overriding service name", "build.quadlet.servicename.volume", []string{"service-name.build"}),
 		Entry("Volume - Quadlet image (.image) overriding service name", "image.quadlet.servicename.volume", []string{"service-name.image"}),
+		Entry(
+			"Volume - Dependency between quadlet units",
+			"dependent.volume",
+			[]string{
+				"basic.build",
+				"basic.container",
+				"basic.image",
+				"basic.kube",
+				"basic.network",
+				"basic.pod",
+				"basic.volume",
+			},
+		),
 
 		Entry("Kube - Quadlet Network", "network.quadlet.kube", []string{"basic.network"}),
 		Entry("Kube - Quadlet Network overriding service name", "network.quadlet.servicename.kube", []string{"service-name.network"}),
+		Entry(
+			"Kube - Dependency between quadlet units",
+			"dependent.kube",
+			[]string{
+				"basic.build",
+				"basic.container",
+				"basic.image",
+				"basic.kube",
+				"basic.network",
+				"basic.pod",
+				"basic.volume",
+			},
+		),
 
 		Entry("Build - Network Key quadlet", "network.quadlet.build", []string{"basic.network"}),
 		Entry("Build - Volume Key", "volume.build", []string{"basic.volume"}),
 		Entry("Build - Volume Key quadlet", "volume.quadlet.build", []string{"basic.volume"}),
 		Entry("Build - Network Key quadlet overriding service name", "network.quadlet.servicename.build", []string{"service-name.network"}),
 		Entry("Build - Volume Key quadlet overriding service name", "volume.quadlet.servicename.build", []string{"service-name.volume"}),
+		Entry(
+			"Build - Dependency between quadlet units",
+			"dependent.build",
+			[]string{
+				"basic.build",
+				"basic.container",
+				"basic.image",
+				"basic.kube",
+				"basic.network",
+				"basic.pod",
+				"basic.volume",
+			},
+		),
 
 		Entry("Pod - Quadlet Network", "network.quadlet.pod", []string{"basic.network"}),
 		Entry("Pod - Quadlet Volume", "volume.pod", []string{"basic.volume"}),
 		Entry("Pod - Quadlet Network overriding service name", "network.servicename.quadlet.pod", []string{"service-name.network"}),
 		Entry("Pod - Quadlet Volume overriding service name", "volume.servicename.pod", []string{"service-name.volume"}),
+		Entry("Pod - Do not autostart a container with pod", "startwithpod.pod", []string{"startwithpod_no.container", "startwithpod_yes.container"}),
+		Entry(
+			"Pod - Dependency between quadlet units",
+			"dependent.pod",
+			[]string{
+				"basic.build",
+				"basic.container",
+				"basic.image",
+				"basic.kube",
+				"basic.network",
+				"basic.pod",
+				"basic.volume",
+			},
+		),
+
+		Entry(
+			"Image - Dependency between quadlet units",
+			"dependent.image",
+			[]string{
+				"basic.build",
+				"basic.container",
+				"basic.image",
+				"basic.kube",
+				"basic.network",
+				"basic.pod",
+				"basic.volume",
+			},
+		),
+
+		Entry(
+			"Network - Dependency between quadlet units",
+			"dependent.network",
+			[]string{
+				"basic.build",
+				"basic.container",
+				"basic.image",
+				"basic.kube",
+				"basic.network",
+				"basic.pod",
+				"basic.volume",
+			},
+		),
 	)
 
 })

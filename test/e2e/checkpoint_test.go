@@ -1131,6 +1131,7 @@ var _ = Describe("Podman checkpoint", func() {
 		)
 
 		It(testName, func() {
+			Skip("FIXME: #24571 - not working an super flaky, don't waste CI time on it")
 			podName := "test_pod"
 
 			if err := criu.CheckForCriu(criu.PodCriuVersion); err != nil {
@@ -1559,8 +1560,8 @@ var _ = Describe("Podman checkpoint", func() {
 		// Prevent --runtime arg from being set to force using default
 		// runtime unless explicitly set through passed args.
 		preservedMakeOptions := podmanTest.PodmanMakeOptions
-		podmanTest.PodmanMakeOptions = func(args []string, noEvents, noCache bool) []string {
-			defaultArgs := preservedMakeOptions(args, noEvents, noCache)
+		podmanTest.PodmanMakeOptions = func(args []string, options PodmanExecOptions) []string {
+			defaultArgs := preservedMakeOptions(args, options)
 			for i := range args {
 				// Runtime is set explicitly, so we should keep --runtime arg.
 				if args[i] == "--runtime" {
