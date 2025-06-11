@@ -111,6 +111,7 @@ const (
 	KeyHostName              = "HostName"
 	KeyImage                 = "Image"
 	KeyImageTag              = "ImageTag"
+	KeyInterfaceName         = "InterfaceName"
 	KeyInternal              = "Internal"
 	KeyIP                    = "IP"
 	KeyIP6                   = "IP6"
@@ -372,6 +373,7 @@ var (
 				KeyIPAMDriver:           true,
 				KeyIPRange:              true,
 				KeyIPv6:                 true,
+				KeyInterfaceName:        true,
 				KeyInternal:             true,
 				KeyNetworkName:          true,
 				KeyNetworkDeleteOnStop:  true,
@@ -975,8 +977,9 @@ func ConvertNetwork(network *parser.UnitFile, name string, unitsInfoMap map[stri
 	lookupAndAddBoolean(network, NetworkGroup, boolKeys, podman)
 
 	stringKeys := map[string]string{
-		KeyDriver:     "--driver",
-		KeyIPAMDriver: "--ipam-driver",
+		KeyDriver:        "--driver",
+		KeyIPAMDriver:    "--ipam-driver",
+		KeyInterfaceName: "--interface-name",
 	}
 	lookupAndAddString(network, NetworkGroup, stringKeys, podman)
 
@@ -1112,6 +1115,9 @@ func ConvertVolume(volume *parser.UnitFile, name string, unitsInfoMap map[string
 		if ok && len(devType) != 0 {
 			if devValid {
 				podman.add("--opt", fmt.Sprintf("type=%s", devType))
+				if devType == "bind" {
+					service.Add(UnitGroup, "RequiresMountsFor", dev)
+				}
 			} else {
 				return nil, warnings, fmt.Errorf("key Type can't be used without Device")
 			}

@@ -803,7 +803,6 @@ BOGUS=foo
 			dirName := "test_subdir"
 
 			err = CopyDirectory(filepath.Join("quadlet", dirName), quadletDir)
-
 			if err != nil {
 				GinkgoWriter.Println("error:", err)
 			}
@@ -975,6 +974,7 @@ BOGUS=foo
 		Entry("image.volume", "image.volume"),
 		Entry("Volume - global args", "globalargs.volume"),
 		Entry("Volume - Containers Conf Modules", "containersconfmodule.volume"),
+		Entry("Volume - Type=bind", "device-bind.volume"),
 
 		Entry("Absolute Path", "absolute.path.kube"),
 		Entry("Basic kube", "basic.kube"),
@@ -1005,6 +1005,7 @@ BOGUS=foo
 		Entry("Network - Gateway", "gateway.network"),
 		Entry("Network - IPAM Driver", "ipam-driver.network"),
 		Entry("Network - IPv6", "ipv6.network"),
+		Entry("Network - InterfaceName network", "interface-name.network"),
 		Entry("Network - Internal network", "internal.network"),
 		Entry("Network - Label", "label.network"),
 		Entry("Network - Multiple Options", "options.multiple.network"),
@@ -1275,5 +1276,4 @@ BOGUS=foo
 			},
 		),
 	)
-
 })

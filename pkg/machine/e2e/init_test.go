@@ -238,6 +238,17 @@ var _ = Describe("podman machine init", func() {
 			Expect(testMachine.Resources.Memory).To(BeEquivalentTo(uint64(2048)))
 		}
 		Expect(testMachine.SSHConfig.RemoteUsername).To(Equal(remoteUsername))
+
+		s := new(startMachine)
+		session, err = mb.setCmd(s).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(session).To(Exit(0))
+
+		ssh := sshMachine{}
+		sshSession, err := mb.setName(mb.name).setCmd(ssh.withSSHCommand([]string{"loginctl -P Linger show-user " + remoteUsername})).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sshSession).To(Exit(0))
+		Expect(sshSession.outputToString()).To(ContainSubstring("yes"))
 	})
 
 	It("machine init with cpus, disk size, memory, timezone", func() {
@@ -531,6 +542,7 @@ var _ = Describe("podman machine init", func() {
 	})
 
 	It("machine init with rosetta=true", func() {
+		Skip("rosetta currently hard disabled https://github.com/containers/podman-machine-os/pull/134")
 		skipIfVmtype(define.QemuVirt, "Test is only for AppleHv")
 		skipIfVmtype(define.WSLVirt, "Test is only for AppleHv")
 		skipIfVmtype(define.HyperVVirt, "Test is only for AppleHv")

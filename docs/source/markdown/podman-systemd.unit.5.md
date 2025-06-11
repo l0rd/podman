@@ -136,11 +136,6 @@ separate drop-in file as described above. The latter allows you to
 install an non-enabled unit and then later enabling it by installing
 the drop-in.
 
-
-**NOTE:** To express dependencies between containers, use the generated names of the services. In other
-words `WantedBy=other.service`, not `WantedBy=other.container`. The same is
-true for other kinds of dependencies, too, like `After=other.service`.
-
 ### Template files
 
 Systemd supports a concept of [template files](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Service%20Templates).
@@ -1398,6 +1393,7 @@ Valid options for `[Network]` are listed below:
 | Driver=bridge                       | --driver bridge                                                 |
 | Gateway=192.168.55.3                | --gateway 192.168.55.3                                          |
 | GlobalArgs=--log-level=debug        | --log-level=debug                                               |
+| InterfaceName=enp1                  | --interface-name enp1                                           |
 | Internal=true                       | --internal                                                      |
 | IPAMDriver=dhcp                     | --ipam-driver dhcp                                              |
 | IPRange=192.168.55.128/25           | --ip-range 192.168.55.128/25                                    |
@@ -1454,6 +1450,14 @@ The format of this is a space separated list of arguments, which can optionally 
 escaped to allow inclusion of whitespace and other control characters.
 
 This key can be listed multiple times.
+
+### `InterfaceName=`
+
+This option maps the *network_interface* option in the network config, see **podman network inspect**.
+Depending on the driver, this can have different effects; for `bridge`, it uses the bridge interface name.
+For `macvlan` and `ipvlan`, it is the parent device on the host. It is the same as `--opt parent=...`.
+
+This is equivalent to the Podman `--interface-name` option.
 
 ### `Internal=` (defaults to `false`)
 

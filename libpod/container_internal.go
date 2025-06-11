@@ -923,7 +923,7 @@ func (c *Container) startDependencies(ctx context.Context) error {
 
 	// Traverse the graph beginning at nodes with no dependencies
 	for _, node := range graph.noDepNodes {
-		startNode(ctx, node, false, ctrErrors, ctrsVisited, true)
+		startNode(ctx, node, false, ctrErrors, ctrsVisited, false)
 	}
 
 	if len(ctrErrors) > 0 {
@@ -957,17 +957,9 @@ func (c *Container) getAllDependencies(visited map[string]*Container) error {
 			if err != nil {
 				return err
 			}
-			status, err := dep.State()
-			if err != nil {
+			visited[depID] = dep
+			if err := dep.getAllDependencies(visited); err != nil {
 				return err
-			}
-			// if the dependency is already running, we can assume its dependencies are also running
-			// so no need to add them to those we need to start
-			if status != define.ContainerStateRunning {
-				visited[depID] = dep
-				if err := dep.getAllDependencies(visited); err != nil {
-					return err
-				}
 			}
 		}
 	}
@@ -1781,6 +1773,15 @@ func (c *Container) mountStorage() (_ string, deferredErr error) {
 		if err != nil {
 			return "", fmt.Errorf("rootfs-overlay: failed to create TempDir in the %s directory: %w", overlayDest, err)
 		}
+
+		// Recreate the rootfs for infra container. It can be missing after system reboot if it's stored on tmpfs.
+		if c.IsDefaultInfra() || c.IsService() {
+			err := c.createInitRootfs()
+			if err != nil {
+				return "", err
+			}
+		}
+
 		overlayMount, err := overlay.Mount(contentDir, c.config.Rootfs, overlayDest, c.RootUID(), c.RootGID(), c.runtime.store.GraphOptions())
 		if err != nil {
 			return "", fmt.Errorf("rootfs-overlay: creating overlay failed %q: %w", c.config.Rootfs, err)

@@ -120,8 +120,10 @@ func CreateContainer(w http.ResponseWriter, r *http.Request) {
 	// moby always create the working directory
 	localTrue := true
 	sg.CreateWorkingDir = &localTrue
-	// moby doesn't inherit /etc/hosts from host
-	sg.BaseHostsFile = "none"
+	// moby doesn't inherit /etc/hosts from host, but only overwrite if not set in containers.conf
+	if rtc.Containers.BaseHostsFile == "" {
+		sg.BaseHostsFile = "none"
+	}
 
 	ic := abi.ContainerEngine{Libpod: runtime}
 	report, err := ic.ContainerCreate(r.Context(), sg)
@@ -207,6 +209,12 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 			jsonString := string(b)
 			entrypoint = &jsonString
 		}
+	} else if cc.Config.Entrypoint != nil {
+		// Entrypoint in HTTP request is set, but it is an empty slice.
+		// Set the entrypoint to empty string slice, because keeping it set to nil
+		// would later fallback to default entrypoint.
+		emptySlice := "[]"
+		entrypoint = &emptySlice
 	}
 
 	// expose ports

@@ -157,6 +157,11 @@ func parseVolumes(rtc *config.Config, volumeFlag, mountFlag, tmpfsFlag []string)
 	}
 	finalOverlayVolume := make([]*specgen.OverlayVolume, 0, len(overlayVolumes))
 	for _, volume := range overlayVolumes {
+		absSrc, err := specgen.ConvertWinMountPath(volume.Source)
+		if err != nil {
+			return nil, fmt.Errorf("getting absolute path of %s: %w", volume.Source, err)
+		}
+		volume.Source = absSrc
 		finalOverlayVolume = append(finalOverlayVolume, volume)
 	}
 	finalImageVolumes := make([]*specgen.ImageVolume, 0, len(unifiedContainerMounts.imageVolumes))
@@ -441,7 +446,7 @@ func parseMountOptions(mountType string, args []string) (*universalMount, error)
 				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
 			}
 			mnt.subPath = value
-		case "target", "dst", "destination":
+		case "target", "dst", "dest", "destination":
 			if mnt.mount.Destination != "" {
 				return nil, fmt.Errorf("cannot pass %q option more than once: %w", name, errOptionArg)
 			}
@@ -612,7 +617,7 @@ func getDevptsMount(args []string) (spec.Mount, error) {
 		switch name {
 		case "uid", "gid", "mode", "ptmxmode", "newinstance", "max":
 			newMount.Options = append(newMount.Options, arg)
-		case "target", "dst", "destination":
+		case "target", "dst", "dest", "destination":
 			if !hasValue {
 				return newMount, fmt.Errorf("%v: %w", name, errOptionArg)
 			}
@@ -669,7 +674,7 @@ func getImageVolume(args []string) (*specgen.ImageVolume, error) {
 				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
 			}
 			newVolume.Source = value
-		case "target", "dst", "destination":
+		case "target", "dst", "dest", "destination":
 			if !hasValue {
 				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
 			}
@@ -723,7 +728,7 @@ func getArtifactVolume(args []string) (*specgen.ArtifactVolume, error) {
 				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
 			}
 			newVolume.Source = value
-		case "target", "dst", "destination":
+		case "target", "dst", "dest", "destination":
 			if !hasValue {
 				return nil, fmt.Errorf("%v: %w", name, errOptionArg)
 			}

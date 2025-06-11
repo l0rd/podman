@@ -19,6 +19,9 @@
 
 %if %{defined copr_username}
 %define copr_build 1
+%if "%{copr_username}" == "rhcontainerbot" && "%{copr_projectname}" == "podman-next"
+%define next_build 1
+%endif
 %endif
 
 # Only RHEL and CentOS Stream rpms are built with fips-enabled go compiler
@@ -46,7 +49,7 @@
 %endif
 
 Name: podman
-%if %{defined copr_build}
+%if %{defined next_build}
 Epoch: 102
 %else
 Epoch: 5
@@ -93,7 +96,6 @@ BuildRequires: shadow-utils-subid-devel
 BuildRequires: pkgconfig
 BuildRequires: make
 BuildRequires: man-db
-BuildRequires: ostree-devel
 BuildRequires: systemd
 BuildRequires: systemd-devel
 Requires: catatonit

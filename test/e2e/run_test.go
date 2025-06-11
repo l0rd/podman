@@ -1475,6 +1475,27 @@ VOLUME %s`, ALPINE, volPath, volPath)
 		Expect(numContainers).To(Equal(0))
 	})
 
+	It("podman run after infra-container rootfs removed", func() {
+		// Regression test for #26190
+		podmanTest.PodmanExitCleanly("run", "--name", "test", "--pod", "new:foobar", ALPINE, "ls")
+
+		podInspect := podmanTest.PodmanExitCleanly("pod", "inspect", "foobar", "--format", "{{.InfraContainerID}}")
+		infraID := podInspect.OutputToString()
+
+		infraInspect := podmanTest.PodmanExitCleanly("inspect", infraID, "--format", "{{.Rootfs}}")
+		rootfs := infraInspect.OutputToString()
+
+		podmanTest.PodmanExitCleanly("pod", "stop", "foobar")
+
+		_, statErr := os.Stat(rootfs)
+		Expect(statErr).ToNot(HaveOccurred())
+
+		err := os.RemoveAll(rootfs)
+		Expect(err).ToNot(HaveOccurred())
+
+		podmanTest.PodmanExitCleanly("run", "--replace", "--name", "test", "--pod", "foobar", ALPINE, "ls")
+	})
+
 	It("podman run --rm failed container should delete itself", func() {
 		session := podmanTest.Podman([]string{"run", "--name", "test", "--rm", ALPINE, "foo"})
 		session.WaitWithDefaultTimeout()
@@ -2269,6 +2290,19 @@ WORKDIR /madethis`, BB)
 		running.WaitWithDefaultTimeout()
 		Expect(running).Should(ExitCleanly())
 		Expect(running.OutputToStringArray()).To(HaveLen(2))
+
+		podmanTest.StopContainer("--all")
+
+		indirectName := "ctr3"
+		indirectContainer := podmanTest.Podman([]string{"create", "--name", indirectName, "--requires", mainName, ALPINE, "top"})
+		indirectContainer.WaitWithDefaultTimeout()
+		Expect(indirectContainer).Should(ExitCleanly())
+
+		for _, name := range []string{depName, indirectName} {
+			start := podmanTest.Podman([]string{"start", name})
+			start.WaitWithDefaultTimeout()
+			Expect(start).Should(ExitCleanly())
+		}
 	})
 
 	It("podman run with pidfile", func() {
