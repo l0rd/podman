@@ -3,15 +3,15 @@
 package machine
 
 import (
-	"errors"
+	// "errors"
 	"fmt"
-	"os"
+	// "os"
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/strongunits"
 	"github.com/containers/podman/v5/cmd/podman/registry"
 	ldefine "github.com/containers/podman/v5/libpod/define"
-	"github.com/containers/podman/v5/libpod/events"
+	// "github.com/containers/podman/v5/libpod/events"
 	"github.com/containers/podman/v5/pkg/machine/define"
 	"github.com/containers/podman/v5/pkg/machine/shim"
 	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
@@ -189,67 +189,67 @@ func initMachine(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%s: %w", initOpts.Name, define.ErrVMAlreadyExists)
 	}
 
-	// check if a system connection already exists
-	cons, err := registry.PodmanConfig().ContainersConfDefaultsRO.GetAllConnections()
-	if err != nil {
-		return err
-	}
-	for _, con := range cons {
-		if con.ReadWrite {
-			for _, connection := range []string{initOpts.Name, fmt.Sprintf("%s-root", initOpts.Name)} {
-				if con.Name == connection {
-					return fmt.Errorf("system connection %q already exists. consider a different machine name or remove the connection with `podman system connection rm`", connection)
-				}
-			}
-		}
-	}
+	// // check if a system connection already exists
+	// cons, err := registry.PodmanConfig().ContainersConfDefaultsRO.GetAllConnections()
+	// if err != nil {
+	// 	return err
+	// }
+	// for _, con := range cons {
+	// 	if con.ReadWrite {
+	// 		for _, connection := range []string{initOpts.Name, fmt.Sprintf("%s-root", initOpts.Name)} {
+	// 			if con.Name == connection {
+	// 				return fmt.Errorf("system connection %q already exists. consider a different machine name or remove the connection with `podman system connection rm`", connection)
+	// 			}
+	// 		}
+	// 	}
+	// }
 
-	for idx, vol := range initOpts.Volumes {
-		initOpts.Volumes[idx] = os.ExpandEnv(vol)
-	}
+	// for idx, vol := range initOpts.Volumes {
+	// 	initOpts.Volumes[idx] = os.ExpandEnv(vol)
+	// }
 
-	// Process optional flags (flags where unspecified / nil has meaning )
-	if cmd.Flags().Changed("user-mode-networking") {
-		initOpts.UserModeNetworking = &initOptionalFlags.UserModeNetworking
-	}
+	// // Process optional flags (flags where unspecified / nil has meaning )
+	// if cmd.Flags().Changed("user-mode-networking") {
+	// 	initOpts.UserModeNetworking = &initOptionalFlags.UserModeNetworking
+	// }
 
-	if cmd.Flags().Changed("memory") {
-		if err := checkMaxMemory(strongunits.MiB(initOpts.Memory)); err != nil {
-			return err
-		}
-	}
+	// if cmd.Flags().Changed("memory") {
+	// 	if err := checkMaxMemory(strongunits.MiB(initOpts.Memory)); err != nil {
+	// 		return err
+	// 	}
+	// }
 
-	// TODO need to work this back in
-	// if finished, err := vm.Init(initOpts); err != nil || !finished {
-	// 	// Finished = true,  err  = nil  -  Success! Log a message with further instructions
-	// 	// Finished = false, err  = nil  -  The installation is partially complete and podman should
-	// 	//                                  exit gracefully with no error and no success message.
-	// 	//                                  Examples:
-	// 	//                                  - a user has chosen to perform their own reboot
-	// 	//                                  - reexec for limited admin operations, returning to parent
-	// 	// Finished = *,     err != nil  -  Exit with an error message
+	// // TODO need to work this back in
+	// // if finished, err := vm.Init(initOpts); err != nil || !finished {
+	// // 	// Finished = true,  err  = nil  -  Success! Log a message with further instructions
+	// // 	// Finished = false, err  = nil  -  The installation is partially complete and podman should
+	// // 	//                                  exit gracefully with no error and no success message.
+	// // 	//                                  Examples:
+	// // 	//                                  - a user has chosen to perform their own reboot
+	// // 	//                                  - reexec for limited admin operations, returning to parent
+	// // 	// Finished = *,     err != nil  -  Exit with an error message
+	// // 	return err
+	// // }
+
+	// err = shim.Init(initOpts, provider)
+	// if err != nil {
+	// 	// The installation is partially complete and podman should
+	// 	// exit gracefully with no error and no success message.
+	// 	// Examples:
+	// 	// - a user has chosen to perform their own reboot
+	// 	// - reexec for limited admin operations, returning to parent
+	// 	if errors.Is(err, define.ErrInitRelaunchAttempt) {
+	// 		return nil
+	// 	}
 	// 	return err
 	// }
 
-	err = shim.Init(initOpts, provider)
-	if err != nil {
-		// The installation is partially complete and podman should
-		// exit gracefully with no error and no success message.
-		// Examples:
-		// - a user has chosen to perform their own reboot
-		// - reexec for limited admin operations, returning to parent
-		if errors.Is(err, define.ErrInitRelaunchAttempt) {
-			return nil
-		}
-		return err
-	}
+	// newMachineEvent(events.Init, events.Event{Name: initOpts.Name})
+	// fmt.Println("Machine init complete")
 
-	newMachineEvent(events.Init, events.Event{Name: initOpts.Name})
-	fmt.Println("Machine init complete")
-
-	if now {
-		return start(cmd, args)
-	}
+	// if now {
+	// 	return start(cmd, args)
+	// }
 	extra := ""
 	if initOpts.Name != defaultMachineName {
 		extra = " " + initOpts.Name
