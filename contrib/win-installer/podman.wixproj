@@ -1,6 +1,7 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
 	<PropertyGroup>
 		<EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+		<SuppressValidation>true</SuppressValidation>
 	</PropertyGroup>
 	<ItemGroup>
 		<HarvestDirectory Include="docs">
@@ -12,7 +13,6 @@
 		<Compile Include="podman.wxs;podman-ui.wxs;welcome-install-dlg.wxs" />
 	</ItemGroup>
 	<ItemGroup>
-		<PackageReference Include="PanelSwWixExtension4" Version="5.4.5.422" />
 		<PackageReference Include="WixToolset.Heat" Version="5.0.2" />
 		<PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
 		<PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />

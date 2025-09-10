@@ -375,7 +375,10 @@ Run the command `dotnet build` to build the standalone `podman.msi` file:
 
 ```pwsh
 Push-Location .\contrib\win-installer\
-dotnet build podman.wixproj /property:DefineConstants="VERSION=9.9.9" -o .
+dotnet clean podman.wixproj
+
+dotnet build podman.wixproj /property:DefineConstants="VERSION=9.9.9" /property:InstallerPlatform="x64" -o .
+dotnet build podman.wixproj /property:DefineConstants="VERSION=9.9.9" /property:InstallerPlatform="arm64" -o .
 Pop-Location
 ```
 
@@ -415,13 +418,18 @@ These commands too are helpful to check the installation:
 ```pwsh
 # Check the copy of the podman client in the Podman folder
 Test-Path -Path "$ENV:PROGRAMFILES\RedHat\Podman\podman.exe"
+Test-Path -Path "$ENV:LocalAppData\Programs\podman\podman.exe"
 # Check the generation of the podman configuration file
 Test-Path -Path "$ENV:PROGRAMDATA\containers\containers.conf.d\99-podman-machine-provider.conf"
+Test-Path -Path "$ENV:APPDATA\containers\containers.conf.d\99-podman-machine-provider.conf"
 # Check that the installer configured the right provider
 Get-Content "$ENV:PROGRAMDATA\containers\containers.conf.d\99-podman-machine-provider.conf" | Select -Skip 1 | ConvertFrom-StringData | % { $_.provider }
+Get-Content "$ENV:APPDATA\containers\containers.conf.d\99-podman-machine-provider.conf" | Select -Skip 1 | ConvertFrom-StringData | % { $_.provider }
 # Check the creation of the registry key
 Test-Path -Path "HKLM:\SOFTWARE\Red Hat\Podman"
+Test-Path -Path "HKCU:\SOFTWARE\Podman"
 Get-ItemProperty "HKLM:\SOFTWARE\Red Hat\Podman" InstallDir
+Get-ItemProperty "HKCU:\SOFTWARE\Podman" InstallDir
 # Check the podman.exe is in the $PATH
 $env:PATH | Select-String -Pattern "Podman"
 ```

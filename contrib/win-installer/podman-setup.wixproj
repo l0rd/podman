@@ -1,5 +1,5 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
-    <PropertyGroup>
+	<PropertyGroup>
 		<EnableDefaultCompileItems>false</EnableDefaultCompileItems>
 		<OutputType>Bundle</OutputType>
 	</PropertyGroup>
@@ -7,5 +7,5 @@
 		<PackageReference Include="WixToolset.BootstrapperApplications.wixext" Version="5.0.2" />
 		<PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
 		<Compile Include="burn.wxs" />
-	 </ItemGroup>
+	</ItemGroup>
 </Project>
