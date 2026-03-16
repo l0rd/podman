@@ -42,7 +42,7 @@ func TestPodOptions(t *testing.T) {
 						areEqual = podField.String() == containerField.String()
 					case reflect.Bool:
 						areEqual = podField.Bool() == containerField.Bool()
-					case reflect.Ptr:
+					case reflect.Pointer:
 						areEqual = reflect.DeepEqual(podField.Elem().Interface(), containerField.Elem().Interface())
 					}
 				}

@@ -102,7 +102,7 @@ func (vf *Helper) Stop(force, wait bool) error {
 	}
 	waitDuration := time.Millisecond * 500
 	// Wait up to 90s then hard force off
-	for i := 0; i < 180; i++ {
+	for range 180 {
 		_, err := vf.getRawState()
 		if err != nil {
 			//nolint:nilerr // error means vfkit is gone so machine is stopped

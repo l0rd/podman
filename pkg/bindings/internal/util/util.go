@@ -58,7 +58,7 @@ func ToParams(o any) (url.Values, error) {
 	}
 	json := jsoniter.ConfigCompatibleWithStandardLibrary
 	s := reflect.ValueOf(o)
-	if reflect.Ptr == s.Kind() {
+	if reflect.Pointer == s.Kind() {
 		s = s.Elem()
 	}
 	sType := s.Type()
@@ -69,7 +69,7 @@ func ToParams(o any) (url.Values, error) {
 		}
 		fieldName = strings.ToLower(fieldName)
 		f := s.Field(i)
-		if reflect.Ptr == f.Kind() {
+		if reflect.Pointer == f.Kind() {
 			f = f.Elem()
 		}
 		paramName := fieldName

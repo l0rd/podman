@@ -1404,7 +1404,7 @@ func AutocompleteFormat(o any) func(cmd *cobra.Command, args []string, toComplet
 		// split this into it struct field names
 		fields := strings.Split(field[len(field)-1], ".")
 		f := reflect.ValueOf(o)
-		if f.Kind() != reflect.Ptr {
+		if f.Kind() != reflect.Pointer {
 			// We panic here to make sure that all callers pass the value by reference.
 			// If someone passes a by value then all podman commands will panic since
 			// this function is run at init time.
@@ -1430,7 +1430,7 @@ func AutocompleteFormat(o any) func(cmd *cobra.Command, args []string, toComplet
 					// ok this is a bit weird but when we have an embedded nil struct
 					// calling FieldByName on a name which is present on this struct will panic
 					// Therefore we have to init them (non nil ptr), https://github.com/containers/podman/issues/14223
-					if field.Anonymous && f.Field(j).Type().Kind() == reflect.Ptr {
+					if field.Anonymous && f.Field(j).Type().Kind() == reflect.Pointer {
 						f.Field(j).Set(reflect.New(f.Field(j).Type().Elem()))
 					}
 				}
@@ -1438,7 +1438,7 @@ func AutocompleteFormat(o any) func(cmd *cobra.Command, args []string, toComplet
 				f = f.FieldByName(fields[i])
 			case reflect.Map:
 				rtype := f.Type().Elem()
-				if rtype.Kind() == reflect.Ptr {
+				if rtype.Kind() == reflect.Pointer {
 					rtype = rtype.Elem()
 				}
 				f = reflect.New(rtype)
@@ -1490,7 +1490,7 @@ func getEntityType(cmd *cobra.Command, args []string, o any) any {
 // it will create a new value from it
 func actualReflectValue(f reflect.Value) reflect.Value {
 	// follow the pointer first
-	if f.Kind() == reflect.Ptr {
+	if f.Kind() == reflect.Pointer {
 		// if the pointer is nil we create a new value from the elements type
 		// this allows us to follow nil pointers and get the actual type
 		if f.IsNil() {
@@ -1526,7 +1526,7 @@ func getStructFields(f reflect.Value, prefix string) []formatSuggestion {
 		fname := field.Name
 		suffix := "}}"
 		kind := field.Type.Kind()
-		if kind == reflect.Ptr {
+		if kind == reflect.Pointer {
 			// make sure to read the actual type when it is a pointer
 			kind = field.Type.Elem().Kind()
 		}
