@@ -143,6 +143,7 @@ func GenerateSystemDFilesForVirtiofsMounts(mounts []machine.VirtIoFs) ([]ignitio
 func StartGenericAppleVM(mc *vmconfigs.MachineConfig, cmdBinary string, bootloader vfConfig.Bootloader, endpoint string) (func() error, func() error, error) {
 	var ignitionSocket *define.VMFile
 
+	fmt.Println("about to call viritioNetNew")
 	// Add networking
 	netDevice, err := vfConfig.VirtioNetNew(applehvMACAddress)
 	if err != nil {
@@ -150,16 +151,19 @@ func StartGenericAppleVM(mc *vmconfigs.MachineConfig, cmdBinary string, bootload
 	}
 	// Set user networking with gvproxy
 
+	fmt.Println("about to call GVProxySocket")
 	gvproxySocket, err := mc.GVProxySocket()
 	if err != nil {
 		return nil, nil, err
 	}
 
+	fmt.Println("about to call WaitForSocketWithBackoffs")
 	// Wait on gvproxy to be running and aware
 	if err := sockets.WaitForSocketWithBackoffs(gvProxyMaxBackoffAttempts, gvProxyWaitBackoff, gvproxySocket.GetPath(), "gvproxy"); err != nil {
 		return nil, nil, err
 	}
 
+	fmt.Println("about to call SetUnixSocketPath")
 	netDevice.SetUnixSocketPath(gvproxySocket.GetPath())
 
 	// create a one-time virtual machine for starting because we dont want all this information in the
@@ -174,6 +178,7 @@ func StartGenericAppleVM(mc *vmconfigs.MachineConfig, cmdBinary string, bootload
 	vm.Devices = append(vm.Devices, defaultDevices...)
 	vm.Devices = append(vm.Devices, netDevice)
 
+	fmt.Println("about to call VirtIOFsToVFKitVirtIODevice")
 	mounts, err := VirtIOFsToVFKitVirtIODevice(mc.Mounts)
 	if err != nil {
 		return nil, nil, err
@@ -202,6 +207,7 @@ func StartGenericAppleVM(mc *vmconfigs.MachineConfig, cmdBinary string, bootload
 		cmd.Stderr = os.Stderr
 	}
 
+	fmt.Println("about to call GetVfKitEndpointCMDArgs")
 	endpointArgs, err := GetVfKitEndpointCMDArgs(endpoint)
 	if err != nil {
 		return nil, nil, err
@@ -309,10 +315,12 @@ func StartGenericAppleVM(mc *vmconfigs.MachineConfig, cmdBinary string, bootload
 		cmd = exec.Command("/usr/bin/open", "-Wa", "Terminal", kdFile.Path)
 	}
 
+	fmt.Println("about to call cmd.Start()")
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
 
+	fmt.Println("cmd.Start() called")
 	returnFunc := func() error {
 		processErrChan := make(chan error)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -331,6 +339,7 @@ func StartGenericAppleVM(mc *vmconfigs.MachineConfig, cmdBinary string, bootload
 				}
 				// lets poll status every half second
 				time.Sleep(500 * time.Millisecond)
+				fmt.Println("polling process status every half second: ", cmdBinary, " ", cmd.Process.Pid)
 			}
 		}()
 

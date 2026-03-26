@@ -70,7 +70,7 @@ var _ = BeforeSuite(func() {
 	pullError = pullOCITestDisk(tmpDir, testDiskProvider)
 
 	if pullError != nil {
-		Fail(fmt.Sprintf("failed to pull disk: %q", pullError))
+		Fail(fmt.Sprintf("failed to pull disk: %q (tmpdir was: %s)", pullError, tmpDir))
 	}
 
 	fmt.Println("Running platform specific set-up")
@@ -243,7 +243,7 @@ func setTmpDir(value string) (string, error) {
 			}
 		}
 		if !containsPath {
-			return "", fmt.Errorf("%s cannot be used. Change to directory mounted on podman machine (e.g. /private/tmp)", value)
+			return "", fmt.Errorf("%s cannot be used because it isn't mounted in the machine. Change to a directory mounted on podman machine (e.g. /private/tmp)", value)
 		}
 		tmpDir = value
 	}

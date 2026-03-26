@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -23,6 +24,8 @@ func (c *CleanupCallback) CleanIfErr(err *error) {
 }
 
 func (c *CleanupCallback) CleanOnSignal() {
+	fmt.Println("CleanOnSignal goroutine started")
+
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 
@@ -31,11 +34,14 @@ func (c *CleanupCallback) CleanOnSignal() {
 		return
 	}
 
+	fmt.Println("Terination signal received. Cleaning up before shutdown.")
+
 	c.clean()
 	os.Exit(1)
 }
 
 func (c *CleanupCallback) clean() {
+	fmt.Println("clean() called")
 	c.mu.Lock()
 	// Claim exclusive usage by copy and resetting to nil
 	funcs := c.Funcs
@@ -44,11 +50,13 @@ func (c *CleanupCallback) clean() {
 
 	// Already claimed or none set
 	if funcs == nil {
+		fmt.Println("clean(): no funcs")
 		return
 	}
 
 	// Cleanup functions can now exclusively be run
 	for _, cleanfunc := range funcs {
+		fmt.Println("clean(): calling ", cleanfunc)
 		if err := cleanfunc(); err != nil {
 			logrus.Error(err)
 		}

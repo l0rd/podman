@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/containers/podman/v6/cmd/podman/registry"
@@ -357,6 +355,7 @@ func checkExclusiveActiveVM(currentProvider vmconfigs.VMProvider, mc *vmconfigs.
 			fail := machineDefine.ErrMultipleActiveVM{Name: name, Provider: localMachine.Provider.VMType().String()}
 			return fmt.Errorf("unable to start: %w", &fail)
 		}
+		fmt.Println("No running machine found")
 	}
 	return nil
 }
@@ -416,6 +415,7 @@ func stopLocked(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *mach
 		return nil
 	}
 	if state != machineDefine.Running {
+		fmt.Println("Failed to stop machine because it's fagged as \"Running\"")
 		return machineDefine.ErrWrongState
 	}
 
@@ -450,21 +450,40 @@ func stopLocked(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *mach
 }
 
 func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.StartOptions, updateSystemConn *bool) error {
-	var updateDefaultConnection bool
+	var (
+		err                     error
+		updateDefaultConnection bool
+	)
+
+	fmt.Println("Start called")
 
 	defaultBackoff := 500 * time.Millisecond
 	maxBackoffs := 6
-	signalChanClosed := false
+
+	// startup rollaback functions
+	// called if an error occurs or if a
+	// a termination signal is sent
+	callbackFuncs := machine.CleanUp()
+	defer callbackFuncs.CleanIfErr(&err)
+	go callbackFuncs.CleanOnSignal()
+
+	fmt.Println("goroutine created")
 
 	dirs, err := env.GetMachineDirs(mp.VMType())
 	if err != nil {
 		return err
 	}
 	mc.Lock()
-	defer mc.Unlock()
+	mcunlock := func() error {
+		mc.Unlock()
+		return nil
+	}
+	callbackFuncs.Add(mcunlock)
+	defer mcunlock()
 	if err := mc.Refresh(); err != nil {
 		return fmt.Errorf("reload config: %w", err)
 	}
+	fmt.Println("mc locked")
 
 	connName := mc.Name
 	if mc.HostUser.Rootful {
@@ -482,7 +501,13 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.St
 			return err
 		}
 		startLock.Lock()
-		defer startLock.Unlock()
+		startunlock := func() error {
+			startLock.Unlock()
+			return nil
+		}
+		callbackFuncs.Add(startunlock)
+
+		fmt.Println("start lock created")
 
 		if err := checkExclusiveActiveVM(mp, mc); err != nil {
 			return err
@@ -526,21 +551,23 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.St
 
 	// if the machine cannot continue starting due to a signal, ensure the state
 	// reflects the machine is no longer starting
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE)
-	go func() {
-		sig, ok := <-signalChan
-		if ok {
-			mc.Starting = false
-			logrus.Error("signal received when starting the machine: ", sig)
+	// signalChan := make(chan os.Signal, 1)
+	// signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE)
+	// go func() {
+	// 	sig, ok := <-signalChan
+	// 	if ok {
+	// 		mc.Starting = false
+	// 		logrus.Error("signal received when starting the machine: ", sig)
+	//
+	// 		if err := mc.Write(); err != nil {
+	// 			logrus.Error(err)
+	// 		}
+	//
+	// 		os.Exit(1)
+	// 	}
+	// }()
 
-			if err := mc.Write(); err != nil {
-				logrus.Error(err)
-			}
-
-			os.Exit(1)
-		}
-	}()
+	fmt.Println("about to mc write")
 
 	// Set starting to true
 	mc.Starting = true
@@ -549,41 +576,35 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.St
 	}
 
 	// Set starting to false on exit
-	defer func() {
+	notstarting := func() error {
 		mc.Starting = false
-		if err := mc.Write(); err != nil {
-			logrus.Error(err)
-		}
+		return mc.Write()
+	}
+	callbackFuncs.Add(notstarting)
 
-		if !signalChanClosed {
-			signal.Stop(signalChan)
-			close(signalChan)
-		}
-	}()
-
+	fmt.Println("about to appendtonewvmfile")
 	gvproxyPidFile, err := dirs.RuntimeDir.AppendToNewVMFile("gvproxy.pid", nil)
 	if err != nil {
 		return err
 	}
 
+	fmt.Println("about to startnetworking")
 	// start gvproxy and set up the API socket forwarding
 	forwardSocketPath, forwardingState, err := startNetworking(mc, mp)
 	if err != nil {
 		return err
 	}
 
-	callBackFuncs := machine.CleanUp()
-	defer callBackFuncs.CleanIfErr(&err)
-	go callBackFuncs.CleanOnSignal()
-
 	// Clean up gvproxy if start fails
 	cleanGV := func() error {
 		return machine.CleanupGVProxy(*gvproxyPidFile)
 	}
-	callBackFuncs.Add(cleanGV)
+	callbackFuncs.Add(cleanGV)
 
 	// if there are generic things that need to be done, a preStart function could be added here
 	// should it be extensive
+
+	fmt.Println("about to startvm")
 
 	// releaseFunc is if the provider starts a vm using a go command
 	// and we still need control of it while it is booting until the ready
@@ -592,6 +613,11 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.St
 	if err != nil {
 		return err
 	}
+	stopVM := func() error {
+		fmt.Println("Stopping the VM")
+		return stopLocked(mc, mp, dirs, true)
+	}
+	callbackFuncs.Add(stopVM)
 
 	if WaitForReady == nil {
 		return errors.New("no valid wait function returned")
@@ -633,11 +659,6 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.St
 		}
 		return errors.New(msg)
 	}
-
-	// now that the machine has transitioned into the running state, we don't need a goroutine listening for SIGINT or SIGTERM to handle state
-	signal.Stop(signalChan)
-	close(signalChan)
-	signalChanClosed = true
 
 	if err := proxyenv.ApplyProxies(mc); err != nil {
 		return err

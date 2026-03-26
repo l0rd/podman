@@ -4,6 +4,7 @@ package vfkit
 
 import (
 	"bytes"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,6 +26,7 @@ const (
 
 func (vf *Helper) get(endpoint string, payload io.Reader) (*http.Response, error) {
 	client := &http.Client{}
+	fmt.Println("vfkit.get called (endpoint: ", endpoint, ", payload: ", payload)
 	req, err := http.NewRequest(http.MethodGet, endpoint, payload)
 	if err != nil {
 		return nil, err
@@ -44,6 +46,7 @@ func (vf *Helper) post(endpoint string, payload io.Reader) (*http.Response, erro
 // getRawState asks vfkit for virtual machine state unmodified (see state())
 func (vf *Helper) getRawState() (define.Status, error) {
 	var response rest.VMState
+	fmt.Println("vfkit.getRawState called")
 	endPoint := vf.Endpoint + state
 	serverResponse, err := vf.get(endPoint, nil)
 	if err != nil {
@@ -66,8 +69,10 @@ func (vf *Helper) getRawState() (define.Status, error) {
 // service is not responding, we assume the service is not running
 // and return a stopped status
 func (vf *Helper) State() (define.Status, error) {
+	fmt.Println("vfkit.State() called")
 	vmState, err := vf.getRawState()
 	if err == nil {
+		fmt.Println("vfkitRawState returned without error")
 		return vmState, nil
 	}
 	if errors.Is(err, unix.ECONNREFUSED) {

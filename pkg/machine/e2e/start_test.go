@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/containers/podman/v6/pkg/machine/define"
@@ -309,6 +310,39 @@ var _ = Describe("podman machine start", func() {
 		listings, err = getSystemConnectionsAsSysConns()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listings.IsDefault(machineName2)).To(BeTrue())
+	})
+	It("machine status is stopped after start is interrupted", func() {
+		// Init a new machine
+		m := randomString()
+		i := new(initMachine)
+		i = i.withImage(mb.imagePath)
+		init, err := mb.setName(m).setCmd(i).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(init).To(Exit(0))
+
+		// Start the machine
+		s := new(startMachine)
+		start, err := mb.setName(m).setCmd(s).runWithoutWait()
+		Expect(err).ToNot(HaveOccurred())
+
+		time.Sleep(3 * time.Second)
+		// Kill the machine after 4 seconds
+		// start.waitWithTimeout(4 * time.Second)
+		// Note eventually does not kill the command as such the command is leaked forever without killing it
+		// Also let's use SIGABRT to create a go stack trace so in case there is a deadlock we see it.
+		start.Signal(syscall.SIGABRT)
+		// Give some time to let the command print the output so it is not printed much later
+		// in the log at the wrong place.
+		time.Sleep(2 * time.Second)
+		Expect(start).ToNot(Exit(1))
+
+		// Expect the
+		t := new(inspectMachine)
+		t = t.withFormat("{{.State}}")
+		inspect, err := mb.setName(m).setCmd(t).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(inspect).To(Exit(0))
+		Expect(inspect.outputToString()).To(Not(Equal(define.Running)))
 	})
 })
 
