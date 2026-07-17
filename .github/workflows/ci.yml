@@ -1,6 +1,10 @@
 name: "ci"
 
 on:
+  workflow_run:
+    workflows: ["sync-fork"]
+    types: [completed]
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -565,13 +569,10 @@ jobs:
         run: .\winmake.ps1 ginkgo-run
 
   windows-machine:
-    needs: [path-filter, build, build-alt, validate-source, windows-installer, macos-installer]
-    # Note we do not check for "code" here because we do not want to trigger machine tests for all code changes.
     if: |
-      github.event_name != 'pull_request' ||
-      needs.path-filter.outputs.all == 'true' ||
-      needs.path-filter.outputs.machine == 'true' ||
-      needs.path-filter.outputs.windows == 'true'
+      github.repository == 'l0rd/podman' &&
+         (github.event_name != 'workflow_run' ||
+         github.event.workflow_run.conclusion == 'success')
     name: windows machine ${{ matrix.provider }}
     runs-on: windows-2025-vs2026
     timeout-minutes: 60
@@ -582,6 +583,7 @@ jobs:
         provider: [hyperv, wsl]
     env:
       CONTAINERS_MACHINE_PROVIDER: ${{ matrix.provider }}
+      CONTAINERS_MACHINE_ROOTFUL: 'true'
     steps:
       - name: Configure git line endings
         shell: pwsh

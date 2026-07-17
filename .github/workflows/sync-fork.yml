@@ -1,0 +1,30 @@
+name: "sync-fork"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
+
+permissions: {}
+
+jobs:
+  sync:
+    if: github.repository == 'l0rd/podman'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ci-machine-rootful
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Sync with upstream main
+        run: |
+          git config --global user.name 'Mario Loriedo'
+          git config --global user.email 'mario.loriedo@gmail.com'
+          git remote add upstream https://github.com/podman-container-tools/podman.git
+          git fetch upstream main
+          git rebase upstream/main
+          git push origin ci-machine-rootful --force-with-lease

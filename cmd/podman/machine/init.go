@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/sirupsen/logrus"
@@ -201,6 +202,14 @@ func initMachine(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("unsupported provider %q", providerOverride)
 		}
 		machineProvider = providers[indexVal]
+	}
+
+	if rootfulOverride, found := os.LookupEnv("CONTAINERS_MACHINE_ROOTFUL"); found && !cmd.Flags().Changed("rootful") {
+		r, err := strconv.ParseBool(rootfulOverride)
+		if err != nil {
+			return fmt.Errorf("cannot parse CONTAINERS_MACHINE_ROOTFUL env var: %w", err)
+		}
+		initOpts.Rootful = r
 	}
 
 	// The vmtype names need to be reserved and cannot be used for podman machine names

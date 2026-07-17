@@ -23,6 +23,7 @@ type initMachine struct {
 	now                bool
 	timezone           string
 	rootful            bool
+	rootless           bool
 	volumes            []string
 	updateConnection   *bool
 	userModeNetworking bool
@@ -64,7 +65,10 @@ func (i *initMachine) buildCmd(m *machineTestBuilder) []string {
 		cmd = append(cmd, "--now")
 	}
 	if i.rootful {
-		cmd = append(cmd, "--rootful")
+		cmd = append(cmd, "--rootful=true")
+	}
+	if i.rootless {
+		cmd = append(cmd, "--rootful=false")
 	}
 	if l := len(i.playbook); l > 0 {
 		cmd = append(cmd, "--playbook", i.playbook)
@@ -167,6 +171,11 @@ func (i *initMachine) withVolume(v string) *initMachine {
 
 func (i *initMachine) withRootful(r bool) *initMachine {
 	i.rootful = r
+	return i
+}
+
+func (i *initMachine) withRootless(r bool) *initMachine {
+	i.rootless = r
 	return i
 }
 
