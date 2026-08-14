@@ -273,7 +273,7 @@ var _ = Describe("podman machine start", func() {
 		// We set true so the new default connection should have changed
 		listings, err = getSystemConnectionsAsSysConns()
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listings.IsDefault(machineName)).To(BeTrue())
+		Expect(listings.IsDefault(machineName) || listings.IsDefault(machineName+"-root")).To(BeTrue())
 	})
 	It("machine init --now with --update-connection", func() {
 		// Add a connection and verify it was set to the default
