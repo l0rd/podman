@@ -79,7 +79,7 @@ var _ = Describe("podman machine ssh", func() {
 		wsl := testProvider.VMType() == define.WSLVirt
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath).withNow()).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath).withNow().withRootless(true)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
