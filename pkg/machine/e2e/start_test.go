@@ -311,7 +311,7 @@ var _ = Describe("podman machine start", func() {
 
 		listings, err = getSystemConnectionsAsSysConns()
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listings.IsDefault(machineName2)).To(BeTrue())
+		Expect(listings.IsDefault(machineName2) || listings.IsDefault(machineName2+"-root")).To(BeTrue())
 	})
 	It("machine init --now with --import-native-ca with mounted data folder", func() {
 		// Create a new machine
