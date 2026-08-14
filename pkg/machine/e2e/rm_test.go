@@ -46,7 +46,7 @@ var _ = Describe("podman machine rm", func() {
 		// Ensure that the system connections have the right rootfulness
 		name = randomString()
 		i = new(initMachine)
-		session, err = mb.setName(name).setCmd(i.withFakeImage(mb)).run()
+		session, err = mb.setName(name).setCmd(i.withFakeImage(mb).withRootless(true)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
