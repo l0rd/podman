@@ -14,6 +14,7 @@ type EngineSetup string
 const (
 	ABIMode    = EngineMode("abi")
 	TunnelMode = EngineMode("tunnel")
+	WslcMode   = EngineMode("wslc")
 )
 
 // Convert EngineMode to String

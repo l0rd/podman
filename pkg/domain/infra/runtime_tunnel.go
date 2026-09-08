@@ -9,6 +9,7 @@ import (
 
 	"go.podman.io/podman/v6/pkg/domain/entities"
 	"go.podman.io/podman/v6/pkg/domain/infra/tunnel"
+	"go.podman.io/podman/v6/pkg/domain/infra/wslc"
 )
 
 var (
@@ -40,6 +41,8 @@ func NewContainerEngine(facts *entities.PodmanConfig) (entities.ContainerEngine,
 	case entities.TunnelMode:
 		ctx, err := newConnection(facts, "")
 		return &tunnel.ContainerEngine{ClientCtx: ctx}, err
+	case entities.WslcMode:
+		return wslc.NewContainerEngine()
 	}
 	return nil, fmt.Errorf("runtime mode '%v' is not supported", facts.EngineMode)
 }
@@ -52,6 +55,8 @@ func NewImageEngine(facts *entities.PodmanConfig) (entities.ImageEngine, error) 
 	case entities.TunnelMode:
 		ctx, err := newConnection(facts, facts.FarmNodeName)
 		return &tunnel.ImageEngine{ClientCtx: ctx, FarmNode: tunnel.FarmNode{NodeName: facts.FarmNodeName}}, err
+	case entities.WslcMode:
+		return wslc.NewImageEngine()
 	}
 	return nil, fmt.Errorf("runtime mode '%v' is not supported", facts.EngineMode)
 }

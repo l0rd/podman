@@ -151,8 +151,14 @@ func newPodmanConfig() {
 	var mode entities.EngineMode
 	remote := options.remote && !isPodmanSh(os.Args)
 	switch runtime.GOOS {
-	case "darwin", "windows":
+	case "darwin":
 		mode = entities.TunnelMode
+	case "windows":
+		if _, found := os.LookupEnv("PODMAN_WSLC"); found {
+			mode = entities.WslcMode
+		} else {
+			mode = entities.TunnelMode
+		}
 	case "linux", "freebsd":
 		// Some linux clients might only be compiled without ABI
 		// support (e.g., podman-remote).
