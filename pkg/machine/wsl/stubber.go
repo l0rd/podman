@@ -33,6 +33,10 @@ func (w WSLStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConf
 
 	_ = setupWslProxyEnv()
 
+	if !wutil.WSLVersionAtLeast(0, 67, 6) {
+		return fmt.Errorf("WSL version 0.67.6 or later is required for native systemd support. Please upgrade WSL with: wsl --update")
+	}
+
 	if opts.UserModeNetworking {
 		if err = verifyWSLUserModeCompat(); err != nil {
 			return err
