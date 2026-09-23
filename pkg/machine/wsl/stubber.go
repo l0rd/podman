@@ -35,6 +35,12 @@ func (w WSLStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConf
 
 	_ = setupWslProxyEnv()
 
+	// WSL v2.5.1 or later is required. Earlier versions will fail to
+	// start Podman machines because they supported cgroupv1.
+	if !wutil.WSLVersionAtLeast(2, 5, 1) {
+		return fmt.Errorf("WSL version 2.5.1 or later is required to run Podman. Please upgrade WSL with: wsl --update")
+	}
+
 	if opts.UserModeNetworking {
 		if err = verifyWSLUserModeCompat(); err != nil {
 			return err
