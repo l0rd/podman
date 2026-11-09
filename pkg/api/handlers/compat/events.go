@@ -106,6 +106,15 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 				e.Action = "die"
 				e.Actor.Attributes["exitCode"] = e.Actor.Attributes["containerExitCode"]
 			}
+			if !utils.IsLibpodRequest(r) {
+				if e.Action == "exec_died" {
+					e.Actor.Attributes["exitCode"] = e.Actor.Attributes["containerExitCode"]
+				}
+				// Docker has no pods and reports exit codes only as "exitCode"
+				// on die and exec_die events.
+				delete(e.Actor.Attributes, "podId")
+				delete(e.Actor.Attributes, "containerExitCode")
+			}
 
 			// Remove fields which are not set in 1.52 and newer.
 			if _, err := apiutil.SupportedVersion(r, ">=1.52.0"); err == nil && !apiutil.IsLibpodRequest(r) {

@@ -22,15 +22,23 @@ t GET "libpod/events?stream=false&since=$START" 200 \
     'select(.status | contains("start")).Action=start' \
     'select(.status | contains("start")).HealthStatus=null'\
 
+t GET "libpod/events?stream=false&since=$START&type=remove"  200  \
+  'select(.status | contains("remove")).Action=remove' \
+  'select(.status | contains("remove")).Actor.Attributes.containerExitCode=1'
+
 # compat api, uses status=die (#12643)
+# podId and containerExitCode are libpod-only attributes
 t GET "events?stream=false&since=$START"  200  \
   'select(.status | contains("start")).Action=start' \
+  'select(.status | contains("start")).Actor.Attributes.podId=null' \
   'select(.status | contains("die")).Action=die' \
-  'select(.status | contains("die")).Actor.Attributes.exitCode=1'
+  'select(.status | contains("die")).Actor.Attributes.exitCode=1' \
+  'select(.status | contains("die")).Actor.Attributes.containerExitCode=null' \
+  'select(.status | contains("die")).Actor.Attributes.podId=null'
 
 t GET "events?stream=false&since=$START&type=remove"  200  \
   'select(.status | contains("remove")).Action=remove' \
-  'select(.status | contains("remove")).Actor.Attributes.containerExitCode=1'
+  'select(.status | contains("remove")).Actor.Attributes.containerExitCode=null'
 
 # compat api does not contain .status for v1.52 and newer
 t GET "/v1.52/events?stream=false&since=$START" 200 \
