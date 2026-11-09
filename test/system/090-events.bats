@@ -532,3 +532,17 @@ EOF
     run_podman events --since=1m --stream=false --filter network=nosuchnetwork-$(safename)
     assert "$output" = "" "no events for a non-existent network name"
 }
+
+# bats test_tags=ci:parallel
+@test "events - network prune" {
+    local netname=net-$(safename)
+    local lname=label$(safename | tr -d -)
+
+    run_podman network create --label $lname=1 $netname
+    run_podman network prune -f --filter label=$lname=1
+    assert "$output" = "$netname" "network prune removed $netname"
+
+    run_podman events --since=1m --stream=false --filter network=$netname --filter event=remove
+    assert "$output" =~ ".* network remove .*name=$netname," \
+        "network prune emits a remove event"
+}

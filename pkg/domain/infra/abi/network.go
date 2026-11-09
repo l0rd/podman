@@ -245,9 +245,13 @@ func (ic *ContainerEngine) NetworkPrune(_ context.Context, options entities.Netw
 
 	pruneReport := make([]*entities.NetworkPruneReport, 0, len(nets))
 	for _, net := range nets {
+		err := ic.Libpod.Network().NetworkRemove(net.Name)
+		if err == nil {
+			ic.Libpod.NewNetworkEvent(events.Remove, net.Name, net.ID, net.Driver)
+		}
 		pruneReport = append(pruneReport, &entities.NetworkPruneReport{
 			Name:  net.Name,
-			Error: ic.Libpod.Network().NetworkRemove(net.Name),
+			Error: err,
 		})
 	}
 	return pruneReport, nil
