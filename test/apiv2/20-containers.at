@@ -482,6 +482,16 @@ t GET containers/$cid/json 200 \
 
 t DELETE containers/$cid?v=true 204
 
+# Volumes keys are container paths, resolved against "/", not -v specs
+t POST containers/create Image=$IMAGE Volumes='{":":{},"e2e_test":{},"/data/":{}}' 201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+t GET containers/$cid/json 200 \
+  '[.Mounts[].Destination] | sort | join(",")'="/:,/data,/e2e_test" \
+  '[.Mounts[].Type] | unique | join(",")'="volume"
+
+t DELETE containers/$cid?v=true 204
+
 # Test Volumes with bind mount, for some reason docker-py sets this #18454
 t POST containers/create Image=$IMAGE Volumes='{"/test/":{}}'  HostConfig='{"Binds":["/tmp:/test/:ro"]}'  201 \
   .Id~[0-9a-f]\\{64\\}

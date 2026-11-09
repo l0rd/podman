@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -146,6 +147,8 @@ func CreateContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	addAnonymousVolumes(sg, body.Volumes)
+
 	if inlineSeccompProfile != "" {
 		sg.SeccompProfile = inlineSeccompProfile
 		// keep SecurityOpt in inspect output matching what the client sent
@@ -198,6 +201,37 @@ func CreateContainer(w http.ResponseWriter, r *http.Request) {
 		Warnings: warnings,
 	}
 	utils.WriteResponse(w, http.StatusCreated, createResponse)
+}
+
+// addAnonymousVolumes adds an anonymous volume for each Config.Volumes key.
+// Docker treats the keys as paths in the container, resolved against the
+// root directory, not as `-v` specs. Keys that are already the destination
+// of another mount, as compose and docker-py send them, are skipped.
+func addAnonymousVolumes(sg *specgen.SpecGenerator, volumes map[string]struct{}) {
+	destinations := make(map[string]bool)
+	for _, m := range sg.Mounts {
+		destinations[path.Clean(m.Destination)] = true
+	}
+	for _, v := range sg.Volumes {
+		destinations[path.Clean(v.Dest)] = true
+	}
+	for _, v := range sg.OverlayVolumes {
+		destinations[path.Clean(v.Destination)] = true
+	}
+	for _, v := range sg.ImageVolumes {
+		destinations[path.Clean(v.Destination)] = true
+	}
+	for _, v := range sg.ArtifactVolumes {
+		destinations[path.Clean(v.Destination)] = true
+	}
+	for vol := range volumes {
+		dest := path.Join("/", vol)
+		if destinations[dest] {
+			continue
+		}
+		destinations[dest] = true
+		sg.Volumes = append(sg.Volumes, &specgen.NamedVolume{Dest: dest})
+	}
 }
 
 func stringMaptoArray(m map[string]string) []string {
@@ -315,7 +349,6 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 
 	// mounts type=tmpfs/bind,source=...,target=...=,opt=val
 	volSources := make(map[string]bool)
-	volDestinations := make(map[string]bool)
 	mounts := make([]string, 0, len(cc.HostConfig.Mounts))
 	var builder strings.Builder
 	for _, m := range cc.HostConfig.Mounts {
@@ -323,11 +356,7 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 		addField(&builder, "source", m.Source)
 		addField(&builder, "target", m.Target)
 
-		// Store source/dest so we don't add duplicates if a volume is
-		// also mentioned in cc.Volumes.
-		// Which Docker Compose v2.0 does, for unclear reasons...
 		volSources[m.Source] = true
-		volDestinations[m.Target] = true
 
 		if m.ReadOnly {
 			addField(&builder, "ro", "true")
@@ -611,29 +640,10 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 	// volumes
 	for _, vol := range cc.HostConfig.Binds {
 		cliOpts.Volume = append(cliOpts.Volume, vol)
-		// Extract the destination so we don't add duplicate mounts in
-		// the volumes phase.
 		splitVol := specgen.SplitVolumeString(vol)
-		switch len(splitVol) {
-		case 1:
-			volDestinations[vol] = true
-		default:
+		if len(splitVol) > 1 {
 			volSources[splitVol[0]] = true
-			volDestinations[splitVol[1]] = true
 		}
-	}
-	// Anonymous volumes are added differently from other volumes, in their
-	// own special field, for reasons known only to Docker. Still use the
-	// format of `-v` so we can just append them in there.
-	// Unfortunately, these may be duplicates of existing mounts in Binds.
-	// So... We need to catch that.
-	// This also handles volumes duplicated between cc.HostConfig.Mounts and
-	// cc.Volumes, as seen in compose v2.0.
-	for vol := range cc.Volumes {
-		if _, ok := volDestinations[vol]; ok {
-			continue
-		}
-		cliOpts.Volume = append(cliOpts.Volume, vol)
 	}
 	// Make mount points for compat volumes
 	for vol := range volSources {
