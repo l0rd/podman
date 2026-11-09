@@ -76,6 +76,40 @@ t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/myrepo&tag=quiet-
 t POST "images/localhost:$REGISTRY_PORT/idonotexist/push?tlsVerify=false" 404   .message="An image does not exist locally with the tag: localhost:$REGISTRY_PORT/idonotexist"
 t POST "images/idonotexist/push?tag=latest" 404   .message="An image does not exist locally with the tag: idonotexist"
 
+# Compat pull with an empty tag and no tag or digest in fromImage pulls all tags
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/alltags&tag=v1" 201
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/alltags&tag=v2" 201
+t POST "libpod/images/localhost:$REGISTRY_PORT/alltags:v1/push?tlsVerify=false&quiet=false" 200
+readarray lines <<<"$output"
+alltags_digest=$(jq -r .manifestdigest <<<"${lines[-1]}")
+t POST "libpod/images/localhost:$REGISTRY_PORT/alltags:v2/push?tlsVerify=false" 200
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v1" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v2" 201
+
+# The compat endpoint has no tlsVerify parameter, so mark the registry insecure
+orig_registries_conf_path=$registries_conf_path
+registries_conf_path=$WORKDIR/registries-alltags.conf
+cat $orig_registries_conf_path - >$registries_conf_path <<EOF
+[[registry]]
+location="localhost:$REGISTRY_PORT"
+insecure=true
+EOF
+stop_service
+start_service
+
+t POST "images/create?fromImage=localhost:$REGISTRY_PORT/alltags" 200
+digests=$(jq -r 'select((.status // "") | startswith("Digest: ")) | .status' <<<"$output")
+is "$digests" "Digest: $alltags_digest
+Digest: $alltags_digest" "Compat pull of all tags: one Digest line per tag"
+t GET libpod/images/localhost:$REGISTRY_PORT/alltags:v1/exists 204
+t GET libpod/images/localhost:$REGISTRY_PORT/alltags:v2/exists 204
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v1" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v2" 201
+
+stop_service
+registries_conf_path=$orig_registries_conf_path
+start_service
+
 t GET libpod/images/$IMAGE/json 200 \
   .RepoTags[-1]=$IMAGE
 

@@ -128,7 +128,7 @@ t GET /v1.43/images/localhost/nocreated:latest/json 200 .Created="0001-01-01T00:
 podman rmi -f localhost/nocreated:latest
 rm -rf $NOCREATED
 
-t POST "images/create?fromImage=alpine" 200 .error~null .status~".*Download complete.*"
+t POST "images/create?fromImage=alpine&tag=latest" 200 .error~null .status~".*Download complete.*"
 t POST "libpod/images/pull?reference=alpine&compatMode=true" 200 .error~null .status~".*Download complete.*"
 
 t POST "images/create?fromImage=alpine&tag=latest" 200 \
@@ -144,7 +144,7 @@ t GET  "images/testimage:20221018/json" 200 \
 old_iid=$(podman image inspect --format "{{.ID}}" docker.io/library/alpine:latest)
 podman rmi -f docker.io/library/alpine:latest
 podman tag $IMAGE docker.io/library/alpine:latest
-t POST "images/create?fromImage=alpine" 200 .error~null .status~".*$old_iid.*"
+t POST "images/create?fromImage=alpine&tag=latest" 200 .error~null .status~".*$old_iid.*"
 podman untag docker.io/library/alpine:latest
 
 t POST "images/create?fromImage=quay.io/libpod/alpine&tag=sha256:fa93b01658e3a5a1686dc3ae55f170d8de487006fb53a28efcd12ab0710a2e5f" 200

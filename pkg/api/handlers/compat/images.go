@@ -298,6 +298,14 @@ func CreateImageFromImage(w http.ResponseWriter, r *http.Request) {
 	}
 	pullOptions.Writer = os.Stderr // allows for debugging on the server
 
+	// Docker pulls all tags of the repository when the tag is empty and
+	// fromImage has neither a tag nor a digest.
+	if query.Tag == "" {
+		if named, err := reference.ParseNormalizedNamed(query.FromImage); err == nil && reference.IsNameOnly(named) {
+			pullOptions.AllTags = true
+		}
+	}
+
 	if _, found := r.URL.Query()["retry"]; found {
 		pullOptions.MaxRetries = &query.Retry
 	}
