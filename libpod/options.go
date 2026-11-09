@@ -739,6 +739,7 @@ func WithStopTimeout(timeout uint) CtrCreateOption {
 		}
 
 		ctr.config.StopTimeout = timeout
+		ctr.config.DefaultStopTimeout = false
 
 		return nil
 	}

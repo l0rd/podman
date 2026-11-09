@@ -149,6 +149,13 @@ func CreateContainer(w http.ResponseWriter, r *http.Request) {
 
 	addAnonymousVolumes(sg, body.Volumes)
 
+	// Docker reports Config.StopTimeout in inspect only when the client set
+	// it. Leave it unset so that libpod applies the containers.conf default
+	// and records that none was given.
+	if body.Config.StopTimeout == nil {
+		sg.StopTimeout = nil
+	}
+
 	// Docker reports HostConfig.Mounts in inspect as they were submitted
 	if len(body.HostConfig.Mounts) > 0 {
 		sg.CompatMounts, err = json.Marshal(body.HostConfig.Mounts)

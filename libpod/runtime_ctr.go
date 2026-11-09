@@ -192,6 +192,7 @@ func (r *Runtime) initContainerVariables(rSpec *spec.Spec, config *ContainerConf
 		ctr.config.StopSignal = 15
 
 		ctr.config.StopTimeout = r.config.Engine.StopTimeout
+		ctr.config.DefaultStopTimeout = true
 	} else {
 		// This is a restore from an imported checkpoint
 		ctr.restoreFromCheckpoint = true
@@ -335,6 +336,7 @@ func (r *Runtime) setupContainer(ctx context.Context, ctr *Container) (_ *Contai
 	}
 	if ctr.config.IsInfra {
 		ctr.config.StopTimeout = 10
+		ctr.config.DefaultStopTimeout = false
 	}
 
 	// Inhibit shutdown until creation succeeds

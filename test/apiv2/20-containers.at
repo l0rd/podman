@@ -394,13 +394,26 @@ cid_top=$(jq -r '.Id' <<<"$output")
 t GET containers/${cid_top}/json 200 \
   .Config.Entrypoint[0]="top" \
   .Config.Cmd='[]' \
-  .Config.StopTimeout="10" \
+  '.Config|has("StopTimeout")=false' \
   .Path="top" \
   .NetworkSettings.Networks.podman.NetworkID=2f259bab93aaaaa2542ba43ef33eb990d0999ee1b9924b557b7be53c0b7a1bb9
+# without StopTimeout in the request, the containers.conf default is used
+t GET libpod/containers/${cid_top}/json 200 \
+  .Config.StopTimeout=10
 t POST  containers/${cid_top}/start 204
 # make sure the container is running
 t GET containers/${cid_top}/json 200 \
   .State.Status="running"
+
+# StopTimeout is reported when set, even to the default value
+for stop_timeout in 10 0 -1; do
+    t POST containers/create Image=$IMAGE StopTimeout=$stop_timeout 201 \
+      .Id~[0-9a-f]\\{64\\}
+    cid_st=$(jq -r '.Id' <<<"$output")
+    t GET containers/$cid_st/json 200 \
+      .Config.StopTimeout=$stop_timeout
+    t DELETE containers/$cid_st 204
+done
 
 # check that gateway is empty not "<nil>", https://github.com/containers/podman/issues/28705
 podman network create testnet --ipv6 --internal --disable-dns

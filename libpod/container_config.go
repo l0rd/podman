@@ -359,6 +359,10 @@ type ContainerMiscConfig struct {
 	StopSignal uint `json:"stopSignal,omitempty"`
 	// StopTimeout is maximum time a container is allowed to run after getting the stop signal
 	StopTimeout uint `json:"stopTimeout,omitempty"`
+	// DefaultStopTimeout is true when no stop timeout was given at
+	// creation and StopTimeout holds the engine default. When false,
+	// StopTimeout may have been given explicitly or set to the default.
+	DefaultStopTimeout bool `json:"defaultStopTimeout,omitempty"`
 	// Timeout is maximum time a container will run before getting the kill signal
 	Timeout uint `json:"timeout,omitempty"`
 	// Time container was created

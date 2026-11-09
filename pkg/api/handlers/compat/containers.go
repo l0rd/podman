@@ -677,7 +677,10 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 	if len(processArgs) > 1 {
 		cb.Args = processArgs[1:]
 	}
-	stopTimeout := int(l.StopTimeout())
+	var stopTimeout *int
+	if !l.DefaultStopTimeout() {
+		stopTimeout = new(int(l.StopTimeout()))
+	}
 
 	var healthcheck *container.HealthConfig
 	if inspect.Config.Healthcheck != nil {
@@ -728,7 +731,7 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 			OnBuild:         nil,
 			Labels:          l.Labels(),
 			StopSignal:      strconv.Itoa(int(l.StopSignal())),
-			StopTimeout:     &stopTimeout,
+			StopTimeout:     stopTimeout,
 			Shell:           nil,
 		},
 		MacAddress: "",

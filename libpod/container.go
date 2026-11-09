@@ -654,6 +654,12 @@ func (c *Container) StopTimeout() uint {
 	return c.config.StopTimeout
 }
 
+// DefaultStopTimeout returns true if no stop timeout was given when the
+// container was created, so StopTimeout returns the engine default.
+func (c *Container) DefaultStopTimeout() bool {
+	return c.config.DefaultStopTimeout
+}
+
 // CreatedTime gets the time when the container was created
 func (c *Container) CreatedTime() time.Time {
 	return c.config.CreatedTime
