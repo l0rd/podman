@@ -443,6 +443,11 @@ func buildFlagsWrapperToOptions(c *cobra.Command, contextDir string, flags *Buil
 	stderr = os.Stderr
 	reporter = os.Stderr
 
+	// The build log must not be mixed into an image exported to stdout.
+	if slices.ContainsFunc(flags.BuildOutputs, isBuildOutputStdout) {
+		stdout = os.Stderr
+	}
+
 	if logfile != nil {
 		logrus.SetOutput(logfile)
 		stdout = logfile
@@ -819,4 +824,10 @@ func isURL(s string) bool {
 		strings.HasPrefix(s, "https://") ||
 		strings.HasPrefix(s, "git://") ||
 		strings.HasPrefix(s, "github.com/")
+}
+
+// isBuildOutputStdout reports whether the --output value streams a tar archive
+// to stdout: "-" or "type=tar,dest=-". Validation is left to the build itself.
+func isBuildOutputStdout(output string) bool {
+	return output == "-" || slices.Contains(strings.Split(output, ","), "dest=-")
 }
