@@ -364,6 +364,14 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 				s.Gateway = net.IP(conf.Gateway.AsSlice())
 			}
 			if conf.IPRange.IsValid() {
+				if conf.Subnet.IsValid() {
+					inSubnet := conf.IPRange.Bits() >= conf.Subnet.Bits() && conf.Subnet.Contains(conf.IPRange.Addr())
+					if !inSubnet {
+						utils.Error(w, http.StatusBadRequest,
+							fmt.Errorf("invalid ip-range %s: parent subnet %s doesn't contain ip-range", conf.IPRange, conf.Subnet))
+						return
+					}
+				}
 				_, net, err := net.ParseCIDR(conf.IPRange.String())
 				if err != nil {
 					utils.InternalServerError(w, fmt.Errorf("failed to parse ip range: %w", err))

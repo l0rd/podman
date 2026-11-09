@@ -207,6 +207,15 @@ t GET networks/iprange-net 200 \
 # clean up
 t DELETE networks/iprange-net 204
 
+# IPRange must be inside its Subnet
+t POST networks/create Name='"iprange-bad"' \
+  IPAM='{"Config":[{"Subnet":"10.10.201.0/24","IPRange":"10.0.0.0/24"}]}' 400 \
+  .cause="invalid ip-range 10.0.0.0/24: parent subnet 10.10.201.0/24 doesn't contain ip-range"
+t POST networks/create Name='"iprange-bad"' \
+  IPAM='{"Config":[{"Subnet":"10.10.201.0/24","IPRange":"10.10.0.0/16"}]}' 400 \
+  .cause="invalid ip-range 10.10.0.0/16: parent subnet 10.10.201.0/24 doesn't contain ip-range"
+t GET networks/iprange-bad 404
+
 #
 # test networks with containers
 #
