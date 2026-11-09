@@ -71,8 +71,10 @@ like "$s0" "sha256:[0-9a-f]\{64\}" \
 t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/myrepo&tag=mytag" 201
 t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/myrepo&tag=quiet-false" 201
 
-# Try to push non-existing image
-t POST "images/localhost:$REGISTRY_PORT/idonotexist/push?tlsVerify=false" 404
+# Try to push non-existing image. Docker reports the familiar repository
+# name, without the tag, and clients match on this text.
+t POST "images/localhost:$REGISTRY_PORT/idonotexist/push?tlsVerify=false" 404   .message="An image does not exist locally with the tag: localhost:$REGISTRY_PORT/idonotexist"
+t POST "images/idonotexist/push?tag=latest" 404   .message="An image does not exist locally with the tag: idonotexist"
 
 t GET libpod/images/$IMAGE/json 200 \
   .RepoTags[-1]=$IMAGE

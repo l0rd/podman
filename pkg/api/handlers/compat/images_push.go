@@ -12,6 +12,7 @@ import (
 	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/sirupsen/logrus"
 	"go.podman.io/common/libimage"
+	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/types"
 	"go.podman.io/podman/v6/libpod"
 	handlers "go.podman.io/podman/v6/pkg/api/handlers"
@@ -93,7 +94,11 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 	}
 	localImage, _, err := runtime.LibimageRuntime().LookupImage(possiblyNormalizedName, lookupOptions)
 	if err != nil {
-		utils.ImageNotFound(w, imageName, fmt.Errorf("failed to find image %s: %w", imageName, err))
+		if errors.Is(err, storage.ErrImageUnknown) {
+			utils.Error(w, http.StatusNotFound, imageNotExistLocallyError(imageName))
+			return
+		}
+		utils.InternalServerError(w, fmt.Errorf("failed to find image %s: %w", imageName, err))
 		return
 	}
 	rawManifest, _, err := localImage.Manifest(r.Context())
@@ -219,7 +224,7 @@ loop: // break out of for/select infinite loop
 				if errors.Is(err, storage.ErrImageUnknown) {
 					// Image may have been removed in the meantime.
 					code = http.StatusNotFound
-					err = errors.New("An image does not exist locally with the tag: " + imageName)
+					err = imageNotExistLocallyError(imageName)
 				}
 				if !statusWritten {
 					utils.Error(w, code, err)
@@ -277,4 +282,13 @@ loop: // break out of for/select infinite loop
 			break loop // break out of for/select infinite loop
 		}
 	}
+}
+
+// imageNotExistLocallyError returns the error Docker reports when the image to
+// push is not in the local store. Clients match on this text.
+func imageNotExistLocallyError(name string) error {
+	if named, err := reference.ParseNormalizedNamed(name); err == nil {
+		name = reference.FamiliarName(named)
+	}
+	return errors.New("An image does not exist locally with the tag: " + name)
 }
