@@ -119,6 +119,8 @@ func (c *Container) newContainerExitedEvent(exitCode int32) {
 	e.ContainerExitCode = &intExitCode
 
 	attrs := c.Labels()
+	// Docker reports how long the container ran, in whole seconds.
+	attrs["execDuration"] = strconv.Itoa(int(c.state.FinishedTime.Sub(c.state.StartedTime).Seconds()))
 	if c.state.OOMKilled {
 		e.OOMKilled = &c.state.OOMKilled
 	}

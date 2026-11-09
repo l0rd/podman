@@ -457,6 +457,20 @@ EOF
 }
 
 # bats test_tags=ci:parallel
+@test "events - died event contains execDuration attribute" {
+    local cname=c-$(safename)
+    run_podman run -d --name $cname $IMAGE sleep 1
+    run_podman wait $cname
+    run_podman events \
+               --filter container=$cname \
+               --filter event=died \
+               --stream=false \
+               --format "{{.Attributes.execDuration}}"
+    assert "$output" =~ "^[0-9]+$" "died event includes the run time in seconds"
+    run_podman rm $cname
+}
+
+# bats test_tags=ci:parallel
 @test "events - volume events" {
     local vname=v-$(safename)
     local lname=label$(safename | tr -d -)
