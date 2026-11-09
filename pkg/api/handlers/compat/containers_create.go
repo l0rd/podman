@@ -85,6 +85,12 @@ func CreateContainer(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusBadRequest, fmt.Errorf("bad parameter: %w", utils.ErrLinkNotSupport))
 		return
 	}
+	for _, endpoint := range body.NetworkingConfig.EndpointsConfig {
+		if err := checkEndpointSettings(endpoint); err != nil {
+			utils.Error(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	rtc, err := runtime.GetConfig()
 	if err != nil {
 		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("unable to get runtime config: %w", err))
@@ -500,6 +506,8 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 			netOpts := types.PerNetworkOptions{}
 			if endpoint != nil {
 				netOpts.Aliases = endpoint.Aliases
+				netOpts.Links = endpoint.Links
+				netOpts.Options = endpoint.DriverOpts
 
 				if endpoint.IPAMConfig != nil {
 					// if IPAMConfig.IPv4Address is provided

@@ -1302,6 +1302,45 @@ t GET containers/dnscontainer/json 200 \
   .NetworkSettings.Networks.dnstest2.DNSNames[0]=dnscontainer \
   .NetworkSettings.Networks.dnstest2.DNSNames[1]=$short_id
 
+#
+# Test that compat create and connect keep the endpoint settings (IPAMConfig,
+# Links, DriverOpts) and return them in container inspect
+#
+podman network create --subnet 10.89.142.0/24 endpointnet
+podman network create --subnet 10.89.143.0/24 endpointnet2
+t POST containers/create?name=endpointctr Image=$IMAGE Cmd='["top"]' \
+  HostConfig='{"NetworkMode":"endpointnet"}' \
+  NetworkingConfig='{"EndpointsConfig":{"endpointnet":{"IPAMConfig":{"IPv4Address":"10.89.142.42"},"Links":["dnscontainer:db"],"DriverOpts":{"com.docker.network.endpoint.custom":"verify"}}}}' \
+  201
+t GET containers/endpointctr/json 200 \
+  .NetworkSettings.Networks.endpointnet.IPAMConfig.IPv4Address=10.89.142.42 \
+  .NetworkSettings.Networks.endpointnet.Links[0]=dnscontainer:db \
+  .NetworkSettings.Networks.endpointnet.DriverOpts[\"com.docker.network.endpoint.custom\"]=verify
+t POST containers/endpointctr/start 204
+t GET containers/endpointctr/json 200 \
+  .NetworkSettings.Networks.endpointnet.IPAddress=10.89.142.42 \
+  .NetworkSettings.Networks.endpointnet.IPAMConfig.IPv4Address=10.89.142.42 \
+  .NetworkSettings.Networks.endpointnet.Links[0]=dnscontainer:db \
+  .NetworkSettings.Networks.endpointnet.DriverOpts[\"com.docker.network.endpoint.custom\"]=verify
+t POST networks/endpointnet2/connect Container=endpointctr \
+  EndpointConfig='{"IPAMConfig":{"IPv4Address":"10.89.143.43"},"Links":["dnscontainer:db2"],"DriverOpts":{"k":"v"}}' \
+  200
+t GET containers/endpointctr/json 200 \
+  .NetworkSettings.Networks.endpointnet2.IPAddress=10.89.143.43 \
+  .NetworkSettings.Networks.endpointnet2.IPAMConfig.IPv4Address=10.89.143.43 \
+  .NetworkSettings.Networks.endpointnet2.Links[0]=dnscontainer:db2 \
+  .NetworkSettings.Networks.endpointnet2.DriverOpts.k=v
+
+# Static link-local IPs are not supported (#24931)
+t POST containers/create Image=$IMAGE HostConfig='{"NetworkMode":"endpointnet"}' \
+  NetworkingConfig='{"EndpointsConfig":{"endpointnet":{"IPAMConfig":{"LinkLocalIPs":["169.254.11.6"]}}}}' \
+  400 \
+  .message~'.*IPAMConfig.LinkLocalIPs is not supported.*'
+t POST networks/endpointnet2/connect Container=dnscontainer \
+  EndpointConfig='{"IPAMConfig":{"LinkLocalIPs":["169.254.11.7"]}}' \
+  400 \
+  .message~'.*IPAMConfig.LinkLocalIPs is not supported.*'
+
 # cleanup
-podman rm -f dnscontainer
-podman network rm -f dnstest dnstest2
+podman rm -f dnscontainer endpointctr
+podman network rm -f dnstest dnstest2 endpointnet endpointnet2

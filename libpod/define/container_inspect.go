@@ -731,14 +731,15 @@ type InspectAdditionalNetwork struct {
 
 	// Name of the network we're connecting to.
 	NetworkID string `json:"NetworkID,omitempty"`
-	// DriverOpts is presently unused and maintained exclusively for
-	// compatibility.
+	// DriverOpts are the driver options the container was given for this
+	// network.
 	DriverOpts map[string]string `json:"DriverOpts"`
-	// IPAMConfig is presently unused and maintained exclusively for
-	// compatibility.
+	// IPAMConfig holds the static IPv4Address and IPv6Address the
+	// container was given for this network.
 	IPAMConfig map[string]string `json:"IPAMConfig"`
-	// Links is presently unused and maintained exclusively for
-	// compatibility.
+	// Links are the Docker-style container links the container was given
+	// for this network. They are stored for compatibility only and are
+	// not applied.
 	Links []string `json:"Links"`
 	// Aliases are user-provided network aliases the container has in this network.
 	Aliases []string `json:"Aliases,omitempty"`

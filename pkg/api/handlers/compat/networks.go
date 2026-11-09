@@ -469,12 +469,26 @@ func RemoveNetwork(w http.ResponseWriter, r *http.Request) {
 	utils.WriteResponse(w, http.StatusNoContent, nil)
 }
 
+// checkEndpointSettings rejects the endpoint settings that Podman cannot apply.
+// Static link-local addresses are not supported by the network backend.
+func checkEndpointSettings(endpoint *dockerNetwork.EndpointSettings) error {
+	if endpoint != nil && endpoint.IPAMConfig != nil && len(endpoint.IPAMConfig.LinkLocalIPs) > 0 {
+		return fmt.Errorf("IPAMConfig.LinkLocalIPs is not supported: %w", define.ErrInvalidArg)
+	}
+	return nil
+}
+
 // Connect adds a container to a network
 func Connect(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 
 	var netConnect dockerNetwork.ConnectRequest
 	if err := utils.ReadJSONFromBody(r, &netConnect); err != nil {
+		utils.Error(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if err := checkEndpointSettings(netConnect.EndpointConfig); err != nil {
 		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
@@ -486,6 +500,8 @@ func Connect(w http.ResponseWriter, r *http.Request) {
 		if netConnect.EndpointConfig.Aliases != nil {
 			netOpts.Aliases = netConnect.EndpointConfig.Aliases
 		}
+		netOpts.Links = netConnect.EndpointConfig.Links
+		netOpts.Options = netConnect.EndpointConfig.DriverOpts
 
 		if netConnect.EndpointConfig.IPAMConfig != nil {
 			ipam := netConnect.EndpointConfig.IPAMConfig
