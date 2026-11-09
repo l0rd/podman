@@ -661,6 +661,18 @@ t GET containers/$cid/json 200 \
 
 t DELETE containers/$cid?v=true 204
 
+# Compat inspect has no State.Health before the first start, then an empty Log array
+t POST containers/create Image=$IMAGE Cmd='["top"]' Healthcheck='{"Test":["true"],"Interval":3600000000000}' 201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+t GET containers/$cid/json 200 \
+  .State.Health=null
+t POST containers/$cid/start 204
+t GET containers/$cid/json 200 \
+  .State.Health.Status=starting \
+  .State.Health.Log=[]
+t DELETE containers/$cid?force=true 204
+
 # Test Compat Create with healthcheck preserving arguments with spaces
 HEALTHCHECK_TMPD=$(mktemp -d podman-apiv2-test.healthcheck.XXXXXXXX)
 cat >$HEALTHCHECK_TMPD/create.json <<EOF

@@ -551,8 +551,11 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 		state.Status = "" // unknown state
 	}
 
-	if l.HasHealthCheck() {
-		state.Health = &container.Health{}
+	// Docker only reports the health state once the container has been
+	// started, and always reports the log as an array.
+	state.Health = nil
+	if l.HasHealthCheck() && !inspect.State.StartedAt.IsZero() {
+		state.Health = &container.Health{Log: []*container.HealthcheckResult{}}
 		if inspect.State.Health != nil {
 			if inspect.State.Health.Status != "" {
 				state.Health.Status = container.HealthStatus(inspect.State.Health.Status)
