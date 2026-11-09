@@ -106,6 +106,18 @@ t GET /v1.44/images/$iid/json 200 \
 t GET /v1.45/images/$iid/json 200 \
   .ContainerConfig=null
 
+# Config.Healthcheck of a docker-format image
+printf "FROM $IMAGE\nHEALTHCHECK --interval=1s --timeout=3s --start-period=2s --retries=4 CMD true\n" | \
+    podman build --format docker -t localhost/healthcheck:latest -
+t GET images/localhost/healthcheck:latest/json 200 \
+  .Config.Healthcheck.Test[0]=CMD-SHELL \
+  .Config.Healthcheck.Test[1]=true \
+  .Config.Healthcheck.Interval=1000000000 \
+  .Config.Healthcheck.Timeout=3000000000 \
+  .Config.Healthcheck.StartPeriod=2000000000 \
+  .Config.Healthcheck.Retries=4
+podman rmi localhost/healthcheck:latest
+
 # Create a modified image with the Created field removed.
 NOCREATED=$(mktemp -d podman-apiv2-test.nocreated.XXXXXXXX)
 podman save --format docker-archive -o $NOCREATED/img.tar $IMAGE

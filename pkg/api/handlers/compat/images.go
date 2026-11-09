@@ -380,6 +380,16 @@ func imageDataToImageInspect(ctx context.Context, l *libimage.Image, r *http.Req
 			StopSignal:   info.Config.StopSignal,
 		},
 	}
+	if hc := info.HealthCheck; hc != nil {
+		config.Healthcheck = &dockerSpec.HealthcheckConfig{
+			Test:          hc.Test,
+			Interval:      hc.Interval,
+			Timeout:       hc.Timeout,
+			StartPeriod:   hc.StartPeriod,
+			StartInterval: hc.StartInterval,
+			Retries:       hc.Retries,
+		}
+	}
 
 	rootfs := dockerImage.RootFS{}
 	if info.RootFS != nil {
