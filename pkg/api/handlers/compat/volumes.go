@@ -60,7 +60,8 @@ func ListVolumes(w http.ResponseWriter, r *http.Request) {
 	for filter, filterValues := range *filtersMap {
 		filterFunc, err := filters.GenerateVolumeFilters(filter, filterValues, runtime)
 		if err != nil {
-			utils.InternalServerError(w, err)
+			utils.Error(w, http.StatusBadRequest, err)
+			return
 		}
 		volumeFilters = append(volumeFilters, filterFunc)
 	}
