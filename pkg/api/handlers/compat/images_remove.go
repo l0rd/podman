@@ -65,16 +65,18 @@ func RemoveImage(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusInternalServerError, err)
 		return
 	}
-	response := make([]map[string]string, 0, len(report.Untagged)+1)
-	for _, d := range report.Deleted {
-		deleted := make(map[string]string, 1)
-		deleted["Deleted"] = d
-		response = append(response, deleted)
-	}
+	// Like Docker, list the untagged names first, then the deleted image IDs
+	// as digests.
+	response := make([]map[string]string, 0, len(report.Untagged)+len(report.Deleted))
 	for _, u := range report.Untagged {
 		untagged := make(map[string]string, 1)
 		untagged["Untagged"] = u
 		response = append(response, untagged)
+	}
+	for _, d := range report.Deleted {
+		deleted := make(map[string]string, 1)
+		deleted["Deleted"] = "sha256:" + d
+		response = append(response, deleted)
 	}
 	utils.WriteResponse(w, http.StatusOK, response)
 }

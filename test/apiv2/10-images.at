@@ -307,7 +307,10 @@ podman create --name test1 test1 echo hi
 
 t DELETE images/test1:latest 409
 podman rm test1
-t DELETE images/test1:latest 200
+t GET images/test1:latest/json 200
+test1_iid=$(jq -r '.Id' <<<"$output")
+# Docker lists the untagged names first, then the deleted IDs as digests.
+t DELETE images/test1:latest 200   length=2   .[0].Untagged~".*test1:latest"   .[1].Deleted="$test1_iid"
 
 t GET "images/get?names=alpine" 200 '[POSIX tar archive]'
 
