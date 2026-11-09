@@ -50,6 +50,12 @@ t GET /v1.43/images/json 200 \
 t GET /v1.44/images/json 200 \
   .[0].VirtualSize=null
 
+# digests=true must return the normal list, RepoDigests is always included
+t GET images/json?digests=true 200 \
+  length=1 \
+  .[0].Id=sha256:$iid \
+  .[0].RepoDigests[0]~.*@sha256:[0-9a-f]\\{64\\}
+
 # Negative test case
 t GET images/json?filter=nonesuch 200 length=0
 

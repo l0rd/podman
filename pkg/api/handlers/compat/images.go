@@ -439,7 +439,6 @@ func GetImages(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 	query := struct {
 		All        bool
-		Digests    bool
 		Filter     string // Docker 1.24 compatibility
 		SharedSize bool   `schema:"shared-size"` // Docker 1.42 compatibility
 	}{
@@ -449,10 +448,6 @@ func GetImages(w http.ResponseWriter, r *http.Request) {
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
 		utils.Error(w, http.StatusBadRequest,
 			fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
-		return
-	}
-	if _, found := r.URL.Query()["digests"]; found && query.Digests {
-		utils.UnSupportedParameter("digests")
 		return
 	}
 

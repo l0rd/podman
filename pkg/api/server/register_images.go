@@ -110,7 +110,7 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//     type: string
 	//   - name: digests
 	//     in: query
-	//     description: Not supported
+	//     description: Show digest information as a RepoDigests field on each image. Ignored, RepoDigests is always included.
 	//     type: boolean
 	//     default: false
 	//   - name: shared-size
