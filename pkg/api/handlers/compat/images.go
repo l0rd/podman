@@ -4,6 +4,7 @@ package compat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"go.podman.io/common/libimage"
 	"go.podman.io/common/pkg/config"
 	"go.podman.io/common/pkg/filters"
+	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/manifest"
 	"go.podman.io/podman/v6/libpod"
 	"go.podman.io/podman/v6/pkg/api/handlers"
@@ -560,11 +562,33 @@ func LoadImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.WriteResponse(w, http.StatusOK, struct {
-		Stream string `json:"stream"`
-	}{
-		Stream: fmt.Sprintf("Loaded image: %s", strings.Join(loadReport.Names, ",")),
-	})
+	// Like Docker, write one message per loaded image, with the familiar
+	// name, or the image ID if the archive entry has no name.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	flusher, _ := w.(http.Flusher)
+	for _, name := range loadReport.Names {
+		msg := "Loaded image: " + name
+		if strings.HasPrefix(name, "sha256:") {
+			msg = "Loaded image ID: " + name
+		} else if named, err := reference.ParseNormalizedNamed(name); err == nil {
+			msg = "Loaded image: " + reference.FamiliarString(named)
+		}
+		if err := enc.Encode(struct {
+			Stream string `json:"stream"`
+		}{
+			Stream: msg + "\n",
+		}); err != nil {
+			logrus.Errorf("Unable to write json: %q", err)
+			return
+		}
+		// Like dockerd, send each message on its own: clients may read one
+		// message per chunk of the response.
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 }
 
 func ExportImages(w http.ResponseWriter, r *http.Request) {

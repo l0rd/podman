@@ -422,12 +422,24 @@ t POST libpod/images/prune 200
 t POST libpod/images/prune 200 length=0 []
 
 # compat api must allow loading tar which contain multiple images
+# with one message per image, docker.io names in familiar form, and
+# "Loaded image ID:" for an entry without a name
 podman pull quay.io/libpod/alpine:latest quay.io/libpod/busybox:latest
-podman save -o ${TMPD}/test.tar quay.io/libpod/alpine:latest quay.io/libpod/busybox:latest
+podman tag quay.io/libpod/busybox:latest docker.io/library/busybox-load:test
+podman save -o ${TMPD}/test.tar quay.io/libpod/alpine:latest docker.io/library/busybox-load:test
+podman rmi docker.io/library/busybox-load:test
 t POST "images/load" ${TMPD}/test.tar 200 \
-  .stream="Loaded image: quay.io/libpod/busybox:latest,quay.io/libpod/alpine:latest"
+  '.stream|select(contains("alpine"))|@json="Loaded image: quay.io/libpod/alpine:latest\n"' \
+  '.stream|select(contains("busybox"))|@json="Loaded image: busybox-load:test\n"'
 t GET libpod/images/quay.io/libpod/alpine:latest/exists  204
-t GET libpod/images/quay.io/libpod/busybox:latest/exists  204
+t GET libpod/images/docker.io/library/busybox-load:test/exists  204
+podman rmi docker.io/library/busybox-load:test
+
+t GET libpod/images/quay.io/libpod/alpine:latest/json 200
+alpine_iid=$(jq -r .Id <<<"$output")
+podman save -o ${TMPD}/test-id.tar $alpine_iid
+t POST "images/load" ${TMPD}/test-id.tar 200 \
+  ".stream|@json=\"Loaded image ID: sha256:$alpine_iid\\n\""
 
 CONTAINERFILE_WITH_ERR_TAR="${TMPD}/containerfile.tar"
 cat > $TMPD/containerfile << EOF
