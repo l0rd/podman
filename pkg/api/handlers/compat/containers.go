@@ -70,6 +70,12 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		options.Volumes = query.DockerVolumes
+		// Docker kills a running container right away on force removal,
+		// without sending the stop signal or waiting for the stop timeout.
+		if query.Force {
+			timeout := uint(0)
+			options.Timeout = &timeout
+		}
 	}
 
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)

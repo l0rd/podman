@@ -443,6 +443,23 @@ t GET containers/$cid/json 200 \
 
 t DELETE containers/$cid 204
 
+# Force removal kills the container right away, ignoring its StopTimeout.
+# sleep runs as PID 1 and ignores SIGTERM, so the stop signal can't end it.
+for stop_timeout in 30 -1; do
+    t POST containers/create Image=$IMAGE Cmd='["sleep","infinity"]' StopTimeout=$stop_timeout 201 \
+      .Id~[0-9a-f]\\{64\\}
+    cid=$(jq -r '.Id' <<<"$output")
+    t POST containers/$cid/start 204
+    t0=$SECONDS
+    t DELETE containers/$cid?force=true 204
+    delta_t=$((SECONDS - t0))
+    if [ $delta_t -lt 10 ]; then
+        _show_ok 1 "force removal with StopTimeout=$stop_timeout took ${delta_t}s (< 10s)"
+    else
+        _show_ok 0 "force removal with StopTimeout=$stop_timeout took ${delta_t}s (< 10s)"
+    fi
+done
+
 # when the image had multi tags, the container's Image should be correct
 # Fixes https://github.com/containers/podman/issues/8547
 t POST containers/create Image=${MultiTagName} 201 \
