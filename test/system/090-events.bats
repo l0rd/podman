@@ -441,6 +441,22 @@ EOF
 }
 
 # bats test_tags=ci:parallel
+@test "events - kill event contains signal attribute" {
+    local cname=c-$(safename)
+    run_podman run -d --name $cname $IMAGE sleep inf
+    # PID 1 has no USR1 handler, so the signal is ignored
+    run_podman kill -s USR1 $cname
+    run_podman kill $cname
+    run_podman events \
+               --filter container=$cname \
+               --filter event=kill \
+               --stream=false \
+               --format "{{.Attributes.signal}}"
+    assert "$output" = $'10\n9' "kill events include the signal number"
+    run_podman rm -f -t0 $cname
+}
+
+# bats test_tags=ci:parallel
 @test "events - volume events" {
     local vname=v-$(safename)
     local lname=label$(safename | tr -d -)
