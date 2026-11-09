@@ -149,6 +149,15 @@ func CreateContainer(w http.ResponseWriter, r *http.Request) {
 
 	addAnonymousVolumes(sg, body.Volumes)
 
+	// Docker reports HostConfig.Mounts in inspect as they were submitted
+	if len(body.HostConfig.Mounts) > 0 {
+		sg.CompatMounts, err = json.Marshal(body.HostConfig.Mounts)
+		if err != nil {
+			utils.Error(w, http.StatusInternalServerError, fmt.Errorf("encoding mounts: %w", err))
+			return
+		}
+	}
+
 	if inlineSeccompProfile != "" {
 		sg.SeccompProfile = inlineSeccompProfile
 		// keep SecurityOpt in inspect output matching what the client sent

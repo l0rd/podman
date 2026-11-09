@@ -605,6 +605,13 @@ func (c *Container) UserVolumes() []string {
 	return volumes
 }
 
+// CompatMounts returns the HostConfig.Mounts list of the Docker API create
+// request, encoded as Docker API JSON. It is empty if the container was not
+// created through the Docker API or the request had no HostConfig.Mounts.
+func (c *Container) CompatMounts() []byte {
+	return slices.Clone(c.config.CompatMounts)
+}
+
 // Entrypoint is the container's entrypoint.
 // This is not added to the spec, but is instead used during image commit.
 func (c *Container) Entrypoint() []string {

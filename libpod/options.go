@@ -1236,6 +1236,20 @@ func WithUserVolumes(volumes []string) CtrCreateOption {
 	}
 }
 
+// WithCompatMounts stores the HostConfig.Mounts list of a Docker API create
+// request, encoded as Docker API JSON, so the Docker-compatible inspect can
+// report it. It does not add any mount to the container.
+func WithCompatMounts(mounts []byte) CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+
+		ctr.config.CompatMounts = slices.Clone(mounts)
+		return nil
+	}
+}
+
 // WithEntrypoint sets the entrypoint of the container.
 // This is not used to change the container's spec, but will instead be used
 // during commit to populate the entrypoint of the new image.

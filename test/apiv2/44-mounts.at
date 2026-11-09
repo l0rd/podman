@@ -69,10 +69,41 @@ t POST containers/create?name=compat_tmpfs_options_test \
   .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
 
-t GET containers/${cid}/json 200 \
+t GET libpod/containers/${cid}/json 200 \
   .HostConfig.Tmpfs.[\"$tmpfs_name2\"]="noexec,ro,size=67,rprivate,nosuid,nodev,tmpcopyup"
 
 t DELETE containers/${cid}?v=true 204
+
+# Compat API: inspect returns HostConfig.Mounts as submitted, and does not list
+# tmpfs mounts from HostConfig.Mounts in HostConfig.Tmpfs
+mounts_vol="apiv2-mounts-vol"
+t POST containers/create?name=compat_hostconfig_mounts_test \
+  Image=$IMAGE \
+  Cmd='["true"]' \
+  HostConfig='{"Tmpfs":{"/legacy":""},"Mounts":[{"Type":"volume","Source":"'$mounts_vol'","Target":"/v"},{"Type":"tmpfs","Target":"/t","ReadOnly":true,"TmpfsOptions":{"SizeBytes":1048576}},{"Type":"bind","Source":"/tmp","Target":"/b","ReadOnly":true},{"Type":"volume","Target":"/anon"}]}' \
+  201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+
+t GET containers/${cid}/json 200 \
+  .HostConfig.Mounts\|length=4 \
+  .HostConfig.Mounts[0].Type=volume \
+  .HostConfig.Mounts[0].Source=$mounts_vol \
+  .HostConfig.Mounts[0].Target=/v \
+  .HostConfig.Mounts[1].Type=tmpfs \
+  .HostConfig.Mounts[1].Target=/t \
+  .HostConfig.Mounts[1].ReadOnly=true \
+  .HostConfig.Mounts[1].TmpfsOptions.SizeBytes=1048576 \
+  .HostConfig.Mounts[2].Type=bind \
+  .HostConfig.Mounts[2].Source=/tmp \
+  .HostConfig.Mounts[2].ReadOnly=true \
+  .HostConfig.Mounts[3].Type=volume \
+  .HostConfig.Mounts[3].Source=null \
+  .HostConfig.Mounts[3].Target=/anon \
+  '.HostConfig.Tmpfs|keys|join(",")=/legacy'
+
+t DELETE containers/${cid}?v=true 204
+podman volume rm "$mounts_vol"
 
 # Compat API (v1.48+): the container-wide HostConfig.VolumeDriver does not apply
 # to volumes defined through Mounts, so create must warn about it.

@@ -1,6 +1,7 @@
 package specgen
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -298,6 +299,12 @@ type ContainerStorageConfig struct {
 	// there are conflicts.
 	// Optional.
 	Mounts []spec.Mount `json:"mounts,omitempty"`
+	// CompatMounts is the HostConfig.Mounts list of a Docker API create
+	// request, encoded as Docker API JSON. It is stored with the container
+	// and only used to report the list back in the Docker-compatible
+	// inspect. It does not add any mount: these are set in Mounts and
+	// Volumes. Only the Docker-compatible API sets it.
+	CompatMounts json.RawMessage `json:"-"`
 	// Volumes are named volumes that will be added to the container.
 	// These will supersede Image Volumes and VolumesFrom volumes where
 	// there are conflicts.

@@ -18,6 +18,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/storage"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
@@ -607,6 +608,19 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 	}
 	hc.Runtime = inspect.OCIRuntime
 	sort.Strings(hc.Binds)
+
+	// Docker returns HostConfig.Mounts as submitted at create, and does not
+	// list tmpfs mounts from HostConfig.Mounts in HostConfig.Tmpfs.
+	if compatMounts := l.CompatMounts(); len(compatMounts) > 0 {
+		if err := json.Unmarshal(compatMounts, &hc.Mounts); err != nil {
+			return nil, fmt.Errorf("decoding mounts: %w", err)
+		}
+		for _, m := range hc.Mounts {
+			if m.Type == mount.TypeTmpfs {
+				delete(hc.Tmpfs, m.Target)
+			}
+		}
+	}
 
 	// Map CgroupMode to CgroupnsMode for Docker API compatibility
 	switch inspect.HostConfig.CgroupMode {

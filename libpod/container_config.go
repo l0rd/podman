@@ -3,6 +3,7 @@
 package libpod
 
 import (
+	stdjson "encoding/json"
 	"net"
 	"time"
 
@@ -330,6 +331,12 @@ type ContainerImageConfig struct {
 	// image that is created, and for triggering some OCI hooks which do not
 	// fire unless user-added volume mounts are present.
 	UserVolumes []string `json:"userVolumes,omitempty"`
+	// CompatMounts is the HostConfig.Mounts list of the Docker API create
+	// request, encoded as Docker API JSON, reported back by the
+	// Docker-compatible inspect. It is not used in spec generation.
+	// Empty if the container was not created through the Docker API or
+	// the request had no HostConfig.Mounts.
+	CompatMounts stdjson.RawMessage `json:"compatMounts,omitempty"`
 	// Entrypoint is the container's entrypoint.
 	// It is not used in spec generation, but will be used when the
 	// container is committed to populate the entrypoint of the new image.

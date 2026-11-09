@@ -800,7 +800,7 @@ rm -rf $HEALTHCHECK_INHERIT_TMPD
 payload='{"Mounts":[{"Type":"tmpfs","Target":"/mnt/scratch","TmpfsOptions":{"SizeBytes":1024,"Mode":493}}]}'
 t POST containers/create Image=$IMAGE HostConfig="$payload" 201 .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
-t GET containers/$cid/json 200 \
+t GET libpod/containers/$cid/json 200 \
     .HostConfig.Tmpfs['"/mnt/scratch"']~.*size=1024.* \
     .HostConfig.Tmpfs['"/mnt/scratch"']~.*mode=755.*
 
@@ -810,7 +810,7 @@ t DELETE containers/$cid?v=true 204
 payload='{"Mounts":[{"Type":"tmpfs","Target":"/mnt/scratch"}]}'
 t POST containers/create Image=$IMAGE HostConfig="$payload" 201 .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
-t GET containers/$cid/json 200 \
+t GET libpod/containers/$cid/json 200 \
     .HostConfig.Tmpfs['"/mnt/scratch"']~.*tmpcopyup.* \
 
 t DELETE containers/$cid?v=true 204

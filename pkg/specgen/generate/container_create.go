@@ -504,6 +504,10 @@ func createContainerOptions(rt *libpod.Runtime, s *specgen.SpecGenerator, pod *l
 		options = append(options, libpod.WithUserVolumes(destinations))
 	}
 
+	if len(s.CompatMounts) > 0 {
+		options = append(options, libpod.WithCompatMounts(s.CompatMounts))
+	}
+
 	if len(volumes) != 0 {
 		var vols []*libpod.ContainerNamedVolume
 		for _, v := range volumes {
