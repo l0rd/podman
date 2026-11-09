@@ -32,6 +32,7 @@ func LogsFromContainer(w http.ResponseWriter, r *http.Request) {
 		Until      string `schema:"until"`
 		Timestamps bool   `schema:"timestamps"`
 		Tail       string `schema:"tail"`
+		Details    bool   `schema:"details"`
 	}{
 		Tail: "all",
 	}
@@ -117,8 +118,13 @@ func LogsFromContainer(w http.ResponseWriter, r *http.Request) {
 	header := make([]byte, 8)
 
 	writeHeader := true
+	// Docker prefixes each line with the log driver's extra attributes,
+	// followed by a space. Podman has no such attributes, so the prefix is
+	// just the space.
+	details := false
 	// Docker does not write stream headers iff the container has a tty.
 	if !utils.IsLibpodRequest(r) {
+		details = query.Details
 		inspectData, err := ctnr.Inspect(false)
 		if err != nil {
 			utils.InternalServerError(w, fmt.Errorf("failed to obtain logs for Container '%s': %w", name, err))
@@ -127,6 +133,9 @@ func LogsFromContainer(w http.ResponseWriter, r *http.Request) {
 		writeHeader = !inspectData.Config.Tty
 	}
 
+	// Partial lines are continuations of the previous line on the same
+	// stream; only the start of a line gets the details prefix.
+	partial := map[string]bool{}
 	for line := range logChannel {
 		if _, found := r.URL.Query()["until"]; found {
 			if line.Time.After(until) && !until.IsZero() {
@@ -158,6 +167,11 @@ func LogsFromContainer(w http.ResponseWriter, r *http.Request) {
 			frame.WriteString(line.Time.Format(logs.LogTimeFormat))
 			frame.WriteString(" ")
 		}
+
+		if details && !partial[line.Device] {
+			frame.WriteString(" ")
+		}
+		partial[line.Device] = line.Partial()
 
 		frame.WriteString(line.Msg)
 		if !line.Partial() {
