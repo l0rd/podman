@@ -19,7 +19,8 @@ t POST volumes/create 201 \
     .Driver=local \
     .Mountpoint~$volumepath/[0-9a-f]\\{64\\}/_data \
     .CreatedAt~[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}.* \
-    .Labels={} \
+    '.Labels["com.docker.volume.anonymous"]=' \
+    '.Labels|length=1' \
     .Options=null
 t POST libpod/volumes/create 201
 t POST libpod/volumes/create \
@@ -83,6 +84,27 @@ t GET libpod/volumes/nonexistent/json 404 \
     .cause="no such volume" \
     .message~.* \
     .response=404
+
+# compat: anonymous volumes carry Docker's com.docker.volume.anonymous label
+podman pull $IMAGE &>/dev/null
+t POST containers/create Image=$IMAGE Volumes='{"/data":{}}' 201 \
+    .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+t GET containers/$cid/json 200 \
+    .Mounts[0].Type=volume
+anonvol=$(jq -r '.Mounts[0].Name' <<<"$output")
+t GET volumes/$anonvol 200 \
+    '.Labels["com.docker.volume.anonymous"]=' \
+    '.Labels|length=1'
+t GET volumes?filters='{"name":["'$anonvol'"]}' 200 \
+    '.Volumes[0].Labels["com.docker.volume.anonymous"]=' \
+    '.Volumes[0].Labels|length=1'
+t GET libpod/volumes/$anonvol/json 200 \
+    .Anonymous=true \
+    .Labels={}
+t GET volumes/foo1 200 \
+    .Labels={}
+t DELETE containers/$cid?v=true 204
 
 ## rename volume
 t POST libpod/volumes/foo2/rename?newName=foo2-renamed 204

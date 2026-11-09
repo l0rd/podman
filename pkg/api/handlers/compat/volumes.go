@@ -22,6 +22,20 @@ import (
 	"go.podman.io/podman/v6/pkg/util"
 )
 
+// dockerAnonymousVolumeLabel is the label Docker Engine (23.0 and later) sets
+// on volumes created without a name. Docker clients rely on it to tell
+// anonymous volumes apart from named ones.
+const dockerAnonymousVolumeLabel = "com.docker.volume.anonymous"
+
+// volumeLabels returns the labels of v as Docker reports them.
+func volumeLabels(v *libpod.Volume) map[string]string {
+	labels := v.Labels()
+	if v.Anonymous() {
+		labels[dockerAnonymousVolumeLabel] = ""
+	}
+	return labels
+}
+
 func ListVolumes(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 
@@ -71,7 +85,7 @@ func ListVolumes(w http.ResponseWriter, r *http.Request) {
 			Driver:     v.Driver(),
 			Mountpoint: mp,
 			CreatedAt:  v.CreatedTime().Format(time.RFC3339),
-			Labels:     v.Labels(),
+			Labels:     volumeLabels(v),
 			Scope:      v.Scope(),
 			Options:    v.Options(),
 		}
@@ -136,7 +150,7 @@ func CreateVolume(w http.ResponseWriter, r *http.Request) {
 		response := volume.Volume{
 			CreatedAt:  existingVolume.CreatedTime().Format(time.RFC3339),
 			Driver:     existingVolume.Driver(),
-			Labels:     existingVolume.Labels(),
+			Labels:     volumeLabels(existingVolume),
 			Mountpoint: mp,
 			Name:       existingVolume.Name(),
 			Options:    existingVolume.Options(),
@@ -185,7 +199,7 @@ func CreateVolume(w http.ResponseWriter, r *http.Request) {
 		Driver:     config.Driver,
 		Mountpoint: mp,
 		CreatedAt:  config.CreatedTime.Format(time.RFC3339),
-		Labels:     config.Labels,
+		Labels:     volumeLabels(vol),
 		Options:    config.Options,
 		Scope:      "local",
 		// ^^ We don't have volume scoping so we'll just claim it's "local"
@@ -215,7 +229,7 @@ func InspectVolume(w http.ResponseWriter, r *http.Request) {
 		Driver:     vol.Driver(),
 		Mountpoint: mp,
 		CreatedAt:  vol.CreatedTime().Format(time.RFC3339),
-		Labels:     vol.Labels(),
+		Labels:     volumeLabels(vol),
 		Options:    vol.Options(),
 		Scope:      vol.Scope(),
 		// TODO: As above, we don't return `Status` or `UsageData` yet
