@@ -27,6 +27,40 @@ t POST /v1.40/auth username=$REGISTRY_USERNAME password=$REGISTRY_PASSWORD serve
   .Status="Login Succeeded" \
   .IdentityToken=""
 
+# Any scheme is accepted, localhost still skips TLS verification
+t POST /v1.40/auth username=$REGISTRY_USERNAME password=$REGISTRY_PASSWORD serveraddress=http://localhost:$REGISTRY_PORT \
+  200 \
+  .Status="Login Succeeded"
+
+# The registry uses a self-signed certificate: other hosts are verified...
+t POST /v1.40/auth username=$REGISTRY_USERNAME password=$REGISTRY_PASSWORD serveraddress=127.0.0.1:$REGISTRY_PORT \
+  500 \
+  .message~'.*certificate.*'
+
+# ...even when the URL looks like it starts with localhost
+t POST /v1.40/auth username=$REGISTRY_USERNAME password=$REGISTRY_PASSWORD serveraddress=https://localhost:x@127.0.0.1:$REGISTRY_PORT/ \
+  500 \
+  .message~'.*certificate.*'
+
+# ...unless registries.conf marks them insecure
+orig_registries_conf_path=$registries_conf_path
+registries_conf_path=$WORKDIR/registries-auth.conf
+cat $orig_registries_conf_path - >$registries_conf_path <<EOF
+[[registry]]
+location="127.0.0.1:$REGISTRY_PORT"
+insecure=true
+EOF
+stop_service
+start_service
+
+t POST /v1.40/auth username=$REGISTRY_USERNAME password=$REGISTRY_PASSWORD serveraddress=http://127.0.0.1:$REGISTRY_PORT \
+  200 \
+  .Status="Login Succeeded"
+
+registries_conf_path=$orig_registries_conf_path
+stop_service
+start_service
+
 # No username -> error
 t POST /v1.40/auth password=$REGISTRY_PASSWORD serveraddress=localhost:$REGISTRY_PORT/ \
   500 \
