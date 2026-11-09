@@ -1518,6 +1518,9 @@ func (c *Container) stopInternal(timeout uint, stoppedByUser bool) error {
 				// If the container has already been removed (e.g., via
 				// the cleanup process), set the container state to "stopped".
 				c.state.State = define.ContainerStateStopped
+				if stopErr == nil {
+					c.newContainerEvent(events.Stop)
+				}
 				return stopErr
 			}
 
@@ -1539,16 +1542,23 @@ func (c *Container) stopInternal(timeout uint, stoppedByUser bool) error {
 	// may have altered the state (and other data), let's check if the
 	// state has changed.  If so, we should return immediately and leave
 	// breadcrumbs for debugging if needed.
-	if c.state.State != define.ContainerStateStopping {
+	// syncContainer() usually finds the exit file already and moves the
+	// container to Stopped; the cleanup process may even have moved it to
+	// Exited. Both mean that the container stopped as requested.
+	switch c.state.State {
+	case define.ContainerStateStopping:
+		c.newContainerEvent(events.Stop)
+		return c.waitForConmonToExitAndSave()
+	case define.ContainerStateStopped, define.ContainerStateExited:
+		c.newContainerEvent(events.Stop)
+		return nil
+	default:
 		logrus.Debugf(
 			"Container %q state changed from %q to %q while waiting for it to be stopped: discontinuing stop procedure as another process interfered",
 			c.ID(), define.ContainerStateStopping, c.state.State,
 		)
 		return nil
 	}
-
-	c.newContainerEvent(events.Stop)
-	return c.waitForConmonToExitAndSave()
 }
 
 func (c *Container) waitForConmonToExitAndSave() error {

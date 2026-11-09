@@ -357,6 +357,22 @@ EOF
 }
 
 # bats test_tags=ci:parallel
+@test "events - podman stop emits one stop event" {
+    for rm in "" "--rm"; do
+        local cname=c$rm-$(safename)
+        run_podman run -d $rm --name $cname $IMAGE top
+        run_podman stop -t 0 $cname
+        run_podman events \
+                   --filter container=$cname \
+                   --filter event=stop \
+                   --stream=false \
+                   --format "{{.Status}}"
+        assert "$output" = "stop" "stop events of container run with '$rm'"
+        run_podman rm -f -t0 $cname
+    done
+}
+
+# bats test_tags=ci:parallel
 @test "events - backend none should error" {
     skip_if_remote "remote does not support --events-backend"
 
