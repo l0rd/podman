@@ -13,6 +13,7 @@ import (
 	"go.podman.io/buildah/pkg/jail"
 	"go.podman.io/common/libnetwork/types"
 	"go.podman.io/podman/v6/libpod/define"
+	"go.podman.io/podman/v6/libpod/events"
 )
 
 type Netstat struct {
@@ -80,6 +81,9 @@ func (r *Runtime) configureNetNS(ctr *Container, ctrNS string, _ bool) (status m
 	netStatus, err := r.setUpNetwork(ctrNS, netOpts)
 	if err != nil {
 		return nil, err
+	}
+	for _, net := range networks {
+		ctr.newNetworkEvent(events.NetworkConnect, net.Name)
 	}
 
 	return netStatus, err

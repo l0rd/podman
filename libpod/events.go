@@ -163,13 +163,32 @@ func (r *Runtime) NewNetworkEvent(status events.Status, netName, netID, netDrive
 	}
 }
 
-// newNetworkEvent creates a new event based on a network connect/disconnect
+// NewNetworkPruneEvent creates a new event for a network prune as a whole
+func (r *Runtime) NewNetworkPruneEvent() {
+	e := events.NewEvent(events.Prune)
+	e.Type = events.Network
+	if err := r.eventer.Write(e); err != nil {
+		logrus.Errorf("Unable to write network event: %q", err)
+	}
+}
+
+// newNetworkEvent creates a new event based on a network connect/disconnect.
+// The network ID and driver are recorded in the attributes, as the network
+// may be gone by the time the event is read.
 func (c *Container) newNetworkEvent(status events.Status, netName string) {
 	e := events.NewEvent(status)
 	e.ID = c.ID()
 	e.Name = c.Name()
 	e.Type = events.Network
 	e.Network = netName
+	if net, err := c.runtime.network.NetworkInspect(netName); err == nil {
+		e.Attributes = map[string]string{
+			"driver":    net.Driver,
+			"networkId": net.ID,
+		}
+	} else {
+		logrus.Debugf("Unable to inspect network %s for the %s event: %v", netName, status, err)
+	}
 	if err := c.runtime.eventer.Write(e); err != nil {
 		logrus.Errorf("Unable to write pod event: %q", err)
 	}

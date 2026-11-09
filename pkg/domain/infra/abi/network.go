@@ -254,6 +254,7 @@ func (ic *ContainerEngine) NetworkPrune(_ context.Context, options entities.Netw
 			Error: err,
 		})
 	}
+	ic.Libpod.NewNetworkPruneEvent()
 	return pruneReport, nil
 }
 

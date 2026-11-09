@@ -143,7 +143,11 @@ func (r *Runtime) teardownNetwork(ctr *Container) error {
 	// netavark Teardown(), so no explicit pesto cleanup is needed here.
 
 	netOpts := ctr.getNetworkOptions(networks)
-	return r.teardownNetworkBackend(ctr.state.NetNS, netOpts)
+	err = r.teardownNetworkBackend(ctr.state.NetNS, netOpts)
+	for _, net := range networks {
+		ctr.newNetworkEvent(events.NetworkDisconnect, net.Name)
+	}
+	return err
 }
 
 // isBridgeNetMode checks if the given network mode is bridge.

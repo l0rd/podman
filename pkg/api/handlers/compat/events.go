@@ -17,6 +17,31 @@ import (
 	"go.podman.io/podman/v6/pkg/util"
 )
 
+// toDockerNetworkEvent rewrites a network event the way Docker reports it.
+// The actor is the network, with only its name and driver as attributes, and
+// connect and disconnect events add the container. Docker calls a removal
+// "destroy", and reports a prune as a whole, with no reclaimed space.
+func toDockerNetworkEvent(libpodEvent *events.Event, e *entities.Event) {
+	attributes := map[string]string{
+		"name": libpodEvent.Network,
+		"type": libpodEvent.Attributes["driver"],
+	}
+	switch libpodEvent.Status {
+	case events.NetworkConnect, events.NetworkDisconnect:
+		attributes["container"] = libpodEvent.ID
+		e.Actor.ID = libpodEvent.Attributes["networkId"]
+	case events.Remove:
+		e.Action = "destroy"
+	case events.Prune:
+		attributes = map[string]string{"reclaimed": "0"}
+	}
+	e.Actor.Attributes = attributes
+	// Docker sets the deprecated fields only on container and image events.
+	e.Status = "" //nolint:staticcheck // deprecated field
+	e.ID = ""     //nolint:staticcheck // deprecated field
+	e.From = ""   //nolint:staticcheck // deprecated field
+}
+
 // GetEvents endpoint serves both the docker-compatible one and the new libpod one
 func GetEvents(w http.ResponseWriter, r *http.Request) {
 	var (
@@ -114,6 +139,9 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 				// on die and exec_die events.
 				delete(e.Actor.Attributes, "podId")
 				delete(e.Actor.Attributes, "containerExitCode")
+				if evt.Event.Type == events.Network {
+					toDockerNetworkEvent(evt.Event, e)
+				}
 			}
 
 			// Remove fields which are not set in 1.52 and newer.

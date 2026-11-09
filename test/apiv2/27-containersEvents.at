@@ -28,17 +28,18 @@ t GET "libpod/events?stream=false&since=$START&type=remove"  200  \
 
 # compat api, uses status=die (#12643)
 # podId and containerExitCode are libpod-only attributes
+# the container also produces network events, which have no status
 t GET "events?stream=false&since=$START"  200  \
-  'select(.status | contains("start")).Action=start' \
-  'select(.status | contains("start")).Actor.Attributes.podId=null' \
-  'select(.status | contains("die")).Action=die' \
-  'select(.status | contains("die")).Actor.Attributes.exitCode=1' \
-  'select(.status | contains("die")).Actor.Attributes.containerExitCode=null' \
-  'select(.status | contains("die")).Actor.Attributes.podId=null'
+  'select(.status // "" | contains("start")).Action=start' \
+  'select(.status // "" | contains("start")).Actor.Attributes.podId=null' \
+  'select(.status // "" | contains("die")).Action=die' \
+  'select(.status // "" | contains("die")).Actor.Attributes.exitCode=1' \
+  'select(.status // "" | contains("die")).Actor.Attributes.containerExitCode=null' \
+  'select(.status // "" | contains("die")).Actor.Attributes.podId=null'
 
 t GET "events?stream=false&since=$START&type=remove"  200  \
-  'select(.status | contains("remove")).Action=remove' \
-  'select(.status | contains("remove")).Actor.Attributes.containerExitCode=null'
+  'select(.status // "" | contains("remove")).Action=remove' \
+  'select(.status // "" | contains("remove")).Actor.Attributes.containerExitCode=null'
 
 # compat api does not contain .status for v1.52 and newer
 t GET "/v1.52/events?stream=false&since=$START" 200 \
@@ -46,6 +47,40 @@ t GET "/v1.52/events?stream=false&since=$START" 200 \
 
 t GET "/v1.52/events?stream=false&since=$START&type=remove" 200 \
   'select(has("status"))|.status='
+
+# compat network events: the actor is the network, with its name and driver,
+# and the container connects and disconnects when it starts and stops
+START=$(date +%s.%N)
+net=events-net-$(random_string 8)
+podman network create $net
+podman create --name events-net-ctr --network $net $IMAGE true
+t GET networks/$net 200
+netid=$(jq -r .Id <<<"$output")
+t GET containers/events-net-ctr/json 200
+cid=$(jq -r .Id <<<"$output")
+podman start --attach events-net-ctr
+podman rm events-net-ctr
+podman network rm $net
+podman network prune -f --filter label=events-net-nomatch
+
+t GET "events?stream=false&since=$START&filters=%7B%22network%22%3A%5B%22$net%22%5D%7D" 200
+is "$(jq -c '[.Action, .Actor.ID, .Actor.Attributes, has("status")]' <<<"$output")" \
+   "[\"create\",\"$netid\",{\"name\":\"$net\",\"type\":\"bridge\"},false]
+[\"connect\",\"$netid\",{\"container\":\"$cid\",\"name\":\"$net\",\"type\":\"bridge\"},false]
+[\"disconnect\",\"$netid\",{\"container\":\"$cid\",\"name\":\"$net\",\"type\":\"bridge\"},false]
+[\"destroy\",\"$netid\",{\"name\":\"$net\",\"type\":\"bridge\"},false]" \
+   "compat network events"
+
+# a prune is reported as a whole, even when it removed nothing
+t GET "events?stream=false&since=$START&filters=%7B%22type%22%3A%5B%22network%22%5D%2C%22event%22%3A%5B%22prune%22%5D%7D" 200 \
+  .Action=prune \
+  .Actor.ID= \
+  '.Actor.Attributes|tojson={"reclaimed":"0"}'
+
+# the libpod endpoint keeps reporting the container as the actor
+t GET "libpod/events?stream=false&since=$START&filters=%7B%22network%22%3A%5B%22$net%22%5D%2C%22event%22%3A%5B%22connect%22%5D%7D" 200 \
+  .Actor.ID=$cid \
+  .Actor.Attributes.network=$net
 
 APIV2_TEST_EXPECT_TIMEOUT=1 t GET "events?stream=true" 999
 like "$(<$WORKDIR/curl.headers.out)" ".*HTTP.* 200 OK.*" \
