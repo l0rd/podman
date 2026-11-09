@@ -645,8 +645,10 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 			HostConfig:      &hc,
 			GraphDriver:     &graphDriver,
 			SizeRw:          inspect.SizeRw,
-			SizeRootFs:      &inspect.SizeRootFs,
 		},
+	}
+	if sz {
+		cb.SizeRootFs = &inspect.SizeRootFs
 	}
 
 	// set Path and Args

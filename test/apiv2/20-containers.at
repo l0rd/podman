@@ -441,6 +441,14 @@ t GET containers/$cid/json 200 \
   .Config.WorkingDir="/dataDir" \
   .Config.StopSignal="9"
 
+# Size fields are only reported when requested
+t GET containers/$cid/json 200 \
+  'has("SizeRw")=false' \
+  'has("SizeRootFs")=false'
+t GET containers/$cid/json?size=true 200 \
+  .SizeRw~[0-9]\\+ \
+  .SizeRootFs~[0-9]\\+
+
 t DELETE containers/$cid 204
 
 # Force removal kills the container right away, ignoring its StopTimeout.
