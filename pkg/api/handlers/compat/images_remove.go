@@ -46,6 +46,7 @@ func RemoveImage(w http.ResponseWriter, r *http.Request) {
 		NoPrune:                      query.NoPrune,
 		Ignore:                       query.Ignore,
 		DisableForceRemoveContainers: true,
+		UntagInUse:                   true,
 	}
 	report, rmerrors := imageEngine.Remove(r.Context(), []string{possiblyNormalizedName}, options)
 	if len(rmerrors) > 0 && rmerrors[0] != nil {

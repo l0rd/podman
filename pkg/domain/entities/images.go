@@ -26,6 +26,9 @@ type ImageRemoveOptions struct {
 	// NoPrune will not remove dangling images
 	NoPrune                      bool
 	DisableForceRemoveContainers bool
+	// UntagInUse untags an image specified by name instead of failing
+	// when a container using it cannot be removed, like Docker does.
+	UntagInUse bool
 }
 
 // ImageRemoveReport is the response for removing one or more image(s) from storage

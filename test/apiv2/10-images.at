@@ -353,16 +353,29 @@ EOF
 
 # Create running container
 podman run --rm -d --name test_container docker.io/library/test1:latest top
+t GET images/test1:latest/json 200
+test1_iid=$(jq -r '.Id' <<<"$output")
 
 # When using the Docker Compat API, force deleting an image
 # shouldn't force delete any container using the image, only
 # containers in a non running state should be removed.
 # https://github.com/containers/podman/issues/25871
-t DELETE images/test1:latest?force=true 409
+t DELETE images/test1:latest 409
+t DELETE images/$test1_iid?force=true 409
+
+# Docker: force deleting a running container's image by name
+# only untags that name, even the last one, and keeps the image.
+podman tag test1:latest docker.io/library/test1:other
+t DELETE images/test1:latest?force=true 200 length=1 \
+    .[0].Untagged=docker.io/library/test1:latest
+t DELETE images/test1:other?force=true 200 length=1 \
+    .[0].Untagged=docker.io/library/test1:other
+t GET images/$test1_iid/json 200 .RepoTags=[]
+t GET containers/test_container/json 200 .State.Running=true
 
 # When using the Podman Libpod API, deleting an image
 # with a running container will fail.
-t DELETE libpod/images/test1:latest 409
+t DELETE libpod/images/$test1_iid 409
 
 # When using the Podman Libpod API, force deleting an
 # image will also force delete all containers using the image.
@@ -371,7 +384,7 @@ t DELETE libpod/images/test1:latest 409
 t GET libpod/containers/test_container/exists 204
 
 # Delete image with force.
-t DELETE libpod/images/test1:latest?force=true 200
+t DELETE libpod/images/$test1_iid?force=true 200
 
 # Verify container also removed.
 t GET libpod/containers/test_container/exists 404

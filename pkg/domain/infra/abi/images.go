@@ -675,6 +675,7 @@ func (ir *ImageEngine) Remove(ctx context.Context, images []string, opts entitie
 	libimageOptions.Ignore = opts.Ignore
 	libimageOptions.LookupManifest = opts.LookupManifest
 	libimageOptions.NoPrune = opts.NoPrune
+	libimageOptions.UntagInUse = opts.UntagInUse
 	if !opts.All {
 		libimageOptions.Filters = append(libimageOptions.Filters, "intermediate=false")
 	}
