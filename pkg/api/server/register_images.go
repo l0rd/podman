@@ -123,6 +123,8 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	// responses:
 	//   200:
 	//     $ref: "#/responses/imageList"
+	//   400:
+	//     $ref: "#/responses/badParamError"
 	//   500:
 	//     $ref: '#/responses/internalError'
 	r.Handle(VersionedPath("/images/json"), s.APIHandler(compat.GetImages)).Methods(http.MethodGet)
@@ -992,6 +994,8 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	// responses:
 	//   200:
 	//     $ref: "#/responses/imageListLibpod"
+	//   400:
+	//     $ref: "#/responses/badParamError"
 	//   500:
 	//     $ref: '#/responses/internalError'
 	r.Handle(VersionedPath("/libpod/images/json"), s.APIHandler(compat.GetImages)).Methods(http.MethodGet)

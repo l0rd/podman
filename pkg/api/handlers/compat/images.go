@@ -498,6 +498,10 @@ func GetImages(w http.ResponseWriter, r *http.Request) {
 	listOptions := entities.ImageListOptions{All: query.All, Filter: filterList, ExtendedAttributes: utils.IsLibpodRequest(r)}
 	summaries, err := imageEngine.List(r.Context(), listOptions)
 	if err != nil {
+		if errors.Is(err, libimage.ErrUnknownFilter) {
+			utils.Error(w, http.StatusBadRequest, err)
+			return
+		}
 		utils.Error(w, http.StatusInternalServerError, err)
 		return
 	}
