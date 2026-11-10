@@ -181,8 +181,13 @@ func (n *netavarkNetwork) networkCreate(newNetwork *types.Network, defaultNet bo
 		subnets[i] = types.IPNet{IPNet: *subnet}
 	}
 
+	// Opaque options are not for netavark to validate, keep them out of
+	// the create request and add them back to its result.
+	netavarkNetwork := *newNetwork
+	netavarkNetwork.OpaqueOptions = nil
+
 	opts := CreateConfigOptions{
-		Network: *newNetwork,
+		Network: netavarkNetwork,
 		Used: Used{
 			Interfaces: internalutil.GetBridgeInterfaceNames(n),
 			Names:      usedNames,
@@ -211,6 +216,7 @@ func (n *netavarkNetwork) networkCreate(newNetwork *types.Network, defaultNet bo
 	if err := parseNetwork(result); err != nil {
 		return nil, err
 	}
+	result.OpaqueOptions = newNetwork.OpaqueOptions
 
 	if !defaultNet {
 		err := n.commitNetwork(result)

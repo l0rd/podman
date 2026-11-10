@@ -191,3 +191,11 @@ require (
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	tags.cncf.io/container-device-interface/specs-go v1.1.1 // indirect
 )
+
+replace go.podman.io/common => /home/mario/git/wslc-podman-backend-repos/container-libs/common
+
+replace go.podman.io/image/v5 => /home/mario/git/wslc-podman-backend-repos/container-libs/image
+
+replace go.podman.io/storage => /home/mario/git/wslc-podman-backend-repos/container-libs/storage
+
+replace go.podman.io/buildah => /home/mario/git/wslc-podman-backend-repos/buildah

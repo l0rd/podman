@@ -1500,16 +1500,18 @@ func (s *stageExecutor) execute(ctx context.Context, base string) (imgID string,
 		}
 	}
 
-	// Parse and populate buildOutputOption if needed
+	// Collect the outputs generated from the root filesystem of the last stage.
 	var buildOutputOptions []output.BuildOutputOption
-	if lastStage && len(s.executor.buildOutputs) > 0 {
-		for _, buildOutput := range s.executor.buildOutputs {
-			logrus.Debugf("generating custom build output with options %q", buildOutput)
-			buildOutputOption, err := output.GetBuildOutput(buildOutput)
-			if err != nil {
-				return "", nil, false, fmt.Errorf("failed to parse build output %q: %w", buildOutput, err)
+	if lastStage {
+		for _, buildOutputOption := range s.executor.buildOutputs {
+			switch buildOutputOption.Type {
+			case output.BuildOutputStdout, output.BuildOutputLocalDir, output.BuildOutputTar:
+				buildOutputOptions = append(buildOutputOptions, buildOutputOption)
+			case output.BuildOutputImage, output.BuildOutputRegistry, output.BuildOutputDockerArchive, output.BuildOutputOCIArchive, output.BuildOutputCacheOnly:
+				// Handled by the executor, once the image is committed and named.
+			default:
+				return "", nil, false, fmt.Errorf("internal error: unexpected build output type %v", buildOutputOption.Type)
 			}
-			buildOutputOptions = append(buildOutputOptions, buildOutputOption)
 		}
 	}
 
@@ -2935,6 +2937,7 @@ func (s *stageExecutor) commit(ctx context.Context, createdBy string, emptyLayer
 }
 
 func (s *stageExecutor) generateBuildOutput(ctx context.Context, buildOutputOpts output.BuildOutputOption) error {
+	logrus.Debugf("generating custom build output with options %+v", buildOutputOpts)
 	forceTimestamp := s.executor.timestamp
 	if s.executor.sourceDateEpoch != nil {
 		forceTimestamp = s.executor.sourceDateEpoch
