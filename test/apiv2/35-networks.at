@@ -300,4 +300,33 @@ t GET containers/cnetnone/json 200 \
 podman rm -f -t0 cnetnone
 podman network rm netnone
 
+#
+# Test removing a network that containers use: like Docker, refuse it only
+# while one of them is running, and disconnect the ones that are not running
+#
+podman network create netrm
+podman network create netrm2
+podman create --network netrm --name netrm-created $IMAGE top
+podman create --network netrm,netrm2 --name netrm-multi $IMAGE top
+podman run --network netrm --name netrm-exited $IMAGE true
+podman run -d --network netrm --name netrm-running $IMAGE top
+
+t DELETE networks/netrm 403 \
+  .message~'error while removing network: network netrm id [0-9a-f]\{64\} has active endpoints'
+t GET networks/netrm 200
+
+podman rm -f -t0 netrm-running
+t DELETE networks/netrm 204
+t GET networks/netrm 404
+t GET containers/netrm-multi/json 200 \
+  .NetworkSettings.Networks.netrm=null \
+  .NetworkSettings.Networks.netrm2.NetworkID~[0-9a-f]\\{64\\}
+t POST containers/netrm-multi/start 204
+t GET containers/netrm-exited/json 200 \
+  .NetworkSettings.Networks.netrm=null
+
+# cleanup
+podman rm -f -t0 netrm-created netrm-multi netrm-exited
+podman network rm netrm2
+
 # vim: filetype=sh

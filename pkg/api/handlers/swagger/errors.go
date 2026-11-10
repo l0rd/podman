@@ -72,6 +72,13 @@ type networkConnectedError struct {
 	Body errorhandling.ErrorModel
 }
 
+// Network is used by a running container
+// swagger:response
+type networkInUseError struct {
+	// in:body
+	Body errorhandling.ErrorModel
+}
+
 // No such exec instance
 // swagger:response
 type execSessionNotFound struct {

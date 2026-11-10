@@ -16,7 +16,10 @@ func (s *APIServer) registerNetworkHandlers(r *mux.Router) error {
 	// tags:
 	//  - networks (compat)
 	// summary: Remove a network
-	// description: Remove a network
+	// description: |
+	//   Remove a network. Without force, the containers that use the network
+	//   and are not running are disconnected from it, and the removal fails if
+	//   one of them is running.
 	// parameters:
 	//  - in: path
 	//    name: name
@@ -37,6 +40,8 @@ func (s *APIServer) registerNetworkHandlers(r *mux.Router) error {
 	// responses:
 	//   204:
 	//     description: no error
+	//   403:
+	//     $ref: "#/responses/networkInUseError"
 	//   404:
 	//     $ref: "#/responses/networkNotFound"
 	//   500:

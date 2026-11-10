@@ -3,11 +3,13 @@
 package compat
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 
 	nettypes "go.podman.io/common/libnetwork/types"
 	netutil "go.podman.io/common/libnetwork/util"
@@ -453,6 +455,21 @@ func RemoveNetwork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name, _ := normalizeNetworkName(runtime, utils.GetName(r))
+	if !query.Force {
+		var err error
+		name, err = disconnectStoppedContainers(r.Context(), runtime, name)
+		if err != nil {
+			switch {
+			case errors.Is(err, define.ErrNoSuchNetwork):
+				utils.Error(w, http.StatusNotFound, err)
+			case errors.Is(err, define.ErrNetworkInUse):
+				utils.Error(w, http.StatusForbidden, err)
+			default:
+				utils.InternalServerError(w, err)
+			}
+			return
+		}
+	}
 	reports, err := ic.NetworkRm(r.Context(), []string{name}, options)
 	if err != nil {
 		utils.Error(w, http.StatusInternalServerError, err)
@@ -473,6 +490,56 @@ func RemoveNetwork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteResponse(w, http.StatusNoContent, nil)
+}
+
+// disconnectStoppedContainers disconnects all the containers that are not
+// running from the network nameOrID, so that the network can be removed, and
+// returns the network name. Docker only refuses to remove a network that has
+// active endpoints: if a container that uses the network is running,
+// disconnectStoppedContainers disconnects none and fails with ErrNetworkInUse.
+func disconnectStoppedContainers(ctx context.Context, runtime *libpod.Runtime, nameOrID string) (string, error) {
+	network, err := runtime.Network().NetworkInspect(nameOrID)
+	if err != nil {
+		return "", err
+	}
+	ctrs, err := runtime.GetAllContainers()
+	if err != nil {
+		return "", err
+	}
+	var stopped []*libpod.Container
+	for _, ctr := range ctrs {
+		networks, err := ctr.Networks()
+		if errors.Is(err, define.ErrNoSuchCtr) || errors.Is(err, define.ErrCtrRemoved) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(networks, network.Name) {
+			continue
+		}
+		state, err := ctr.State()
+		if err != nil {
+			return "", err
+		}
+		switch state {
+		case define.ContainerStateConfigured, define.ContainerStateCreated, define.ContainerStateStopped, define.ContainerStateExited:
+			stopped = append(stopped, ctr)
+		default:
+			return "", fmt.Errorf("error while removing network: network %s id %s has active endpoints%.0w", network.Name, network.ID, define.ErrNetworkInUse)
+		}
+	}
+	for _, ctr := range stopped {
+		// A stopped container still has its network set up until it is
+		// cleaned up, and disconnect would leave it behind.
+		if err := ctr.Cleanup(ctx, true); err != nil && !errors.Is(err, define.ErrCtrStateInvalid) {
+			return "", err
+		}
+		if err := ctr.NetworkDisconnect(ctr.ID(), network.Name, false); err != nil {
+			return "", err
+		}
+	}
+	return network.Name, nil
 }
 
 // checkEndpointSettings rejects the endpoint settings that Podman cannot apply.
