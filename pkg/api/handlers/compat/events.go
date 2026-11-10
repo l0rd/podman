@@ -42,6 +42,41 @@ func toDockerNetworkEvent(libpodEvent *events.Event, e *entities.Event) {
 	e.From = ""   //nolint:staticcheck // deprecated field
 }
 
+// toDockerVolumeEvent rewrites a volume event the way Docker reports it. The
+// actor is the volume name, with only its driver as attribute, and mount and
+// unmount events add the container and, on mount, where and how the volume is
+// mounted. Docker calls a removal "destroy", and reports a prune only as a
+// whole, with the reclaimed space. It returns false for an event that Docker
+// does not write.
+func toDockerVolumeEvent(libpodEvent *events.Event, e *entities.Event) bool {
+	attributes := map[string]string{"driver": libpodEvent.Attributes["driver"]}
+	switch libpodEvent.Status {
+	case events.Mount:
+		attributes["container"] = libpodEvent.Attributes["container"]
+		attributes["destination"] = libpodEvent.Attributes["destination"]
+		attributes["read/write"] = libpodEvent.Attributes["read/write"]
+		// Docker does not support a propagation mode on volume mounts.
+		attributes["propagation"] = ""
+	case events.Unmount:
+		attributes["container"] = libpodEvent.Attributes["container"]
+	case events.Remove:
+		e.Action = "destroy"
+	case events.Prune:
+		// A pruned volume already has its removal event.
+		if libpodEvent.Name != "" {
+			return false
+		}
+		attributes = map[string]string{"reclaimed": libpodEvent.Attributes["reclaimed"]}
+	}
+	e.Actor.ID = libpodEvent.Name
+	e.Actor.Attributes = attributes
+	// Docker sets the deprecated fields only on container and image events.
+	e.Status = "" //nolint:staticcheck // deprecated field
+	e.ID = ""     //nolint:staticcheck // deprecated field
+	e.From = ""   //nolint:staticcheck // deprecated field
+	return true
+}
+
 // GetEvents endpoint serves both the docker-compatible one and the new libpod one
 func GetEvents(w http.ResponseWriter, r *http.Request) {
 	var (
@@ -139,8 +174,13 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 				// on die and exec_die events.
 				delete(e.Actor.Attributes, "podId")
 				delete(e.Actor.Attributes, "containerExitCode")
-				if evt.Event.Type == events.Network {
+				switch evt.Event.Type {
+				case events.Network:
 					toDockerNetworkEvent(evt.Event, e)
+				case events.Volume:
+					if !toDockerVolumeEvent(evt.Event, e) {
+						continue
+					}
 				}
 			}
 

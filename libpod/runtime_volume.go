@@ -178,6 +178,7 @@ func (r *Runtime) PruneVolumes(ctx context.Context, filterFuncs []VolumeFilter, 
 		return nil, err
 	}
 
+	var reclaimed uint64
 	for _, vol := range vols {
 		dangling, err := vol.IsDangling()
 		if err != nil {
@@ -208,9 +209,13 @@ func (r *Runtime) PruneVolumes(ctx context.Context, filterFuncs []VolumeFilter, 
 				}
 			} else {
 				vol.newVolumeEvent(events.Prune)
+				reclaimed += report.Size
 			}
 		}
 		preports = append(preports, report)
+	}
+	if !dryRun {
+		r.newVolumePruneEvent(reclaimed)
 	}
 	return preports, nil
 }

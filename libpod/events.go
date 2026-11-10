@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -218,11 +219,45 @@ func (r *Runtime) NewSystemEvent(status events.Status) {
 
 // newVolumeEvent creates a new event for a libpod volume
 func (v *Volume) newVolumeEvent(status events.Status) {
+	v.newVolumeEventWithAttributes(status, nil)
+}
+
+// newVolumeMountEvent creates a new event for a volume mounted into a container
+func (v *Volume) newVolumeMountEvent(ctr *Container, namedVol *ContainerNamedVolume) {
+	v.newVolumeEventWithAttributes(events.Mount, map[string]string{
+		"container":   ctr.ID(),
+		"destination": namedVol.Dest,
+		"read/write":  strconv.FormatBool(!slices.Contains(namedVol.Options, "ro")),
+	})
+}
+
+// newVolumeUnmountEvent creates a new event for a volume unmounted from a container
+func (v *Volume) newVolumeUnmountEvent(ctr *Container) {
+	v.newVolumeEventWithAttributes(events.Unmount, map[string]string{"container": ctr.ID()})
+}
+
+// newVolumeEventWithAttributes creates a new event for a libpod volume. The
+// volume driver and the given attributes are added to the volume labels in
+// the event attributes.
+func (v *Volume) newVolumeEventWithAttributes(status events.Status, attributes map[string]string) {
 	e := events.NewEvent(status)
 	e.Name = v.Name()
 	e.Type = events.Volume
 	e.Attributes = v.Labels()
+	e.Attributes["driver"] = v.Driver()
+	maps.Copy(e.Attributes, attributes)
 	if err := v.runtime.eventer.Write(e); err != nil {
+		logrus.Errorf("Unable to write volume event: %q", err)
+	}
+}
+
+// newVolumePruneEvent creates a new event for a volume prune as a whole,
+// with the space it reclaimed
+func (r *Runtime) newVolumePruneEvent(reclaimed uint64) {
+	e := events.NewEvent(events.Prune)
+	e.Type = events.Volume
+	e.Attributes = map[string]string{"reclaimed": strconv.FormatUint(reclaimed, 10)}
+	if err := r.eventer.Write(e); err != nil {
 		logrus.Errorf("Unable to write volume event: %q", err)
 	}
 }

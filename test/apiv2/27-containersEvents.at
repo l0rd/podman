@@ -82,6 +82,43 @@ t GET "libpod/events?stream=false&since=$START&filters=%7B%22network%22%3A%5B%22
   .Actor.ID=$cid \
   .Actor.Attributes.network=$net
 
+# compat volume events: the actor is the volume name, with its driver, and the
+# container mounts and unmounts the volume when it starts and stops
+START=$(date +%s.%N)
+vol=events-vol-$(random_string 8)
+podman volume create --label events-vol-label=1 $vol
+podman create --name events-vol-ctr -v $vol:/data $IMAGE sh -c 'head -c 4096 /dev/zero >/data/file'
+t GET containers/events-vol-ctr/json 200
+cid=$(jq -r .Id <<<"$output")
+podman start --attach events-vol-ctr
+podman rm events-vol-ctr
+t POST "volumes/prune?filters=%7B%22all%22%3A%5B%22true%22%5D%2C%22label%22%3A%5B%22events-vol-label%22%5D%7D" 200 \
+  .VolumesDeleted[0]=$vol
+reclaimed=$(jq -r .SpaceReclaimed <<<"$output")
+t POST "volumes/prune?filters=%7B%22all%22%3A%5B%22true%22%5D%2C%22label%22%3A%5B%22events-vol-label%22%5D%7D" 200 \
+  .SpaceReclaimed=0
+
+t GET "events?stream=false&since=$START&filters=%7B%22volume%22%3A%5B%22$vol%22%5D%7D" 200
+is "$(jq -c '[.Action, .Actor.ID, .Actor.Attributes, has("status")]' <<<"$output")" \
+   "[\"create\",\"$vol\",{\"driver\":\"local\"},false]
+[\"mount\",\"$vol\",{\"container\":\"$cid\",\"destination\":\"/data\",\"driver\":\"local\",\"propagation\":\"\",\"read/write\":\"true\"},false]
+[\"unmount\",\"$vol\",{\"container\":\"$cid\",\"driver\":\"local\"},false]
+[\"destroy\",\"$vol\",{\"driver\":\"local\"},false]" \
+   "compat volume events"
+
+# a prune is reported as a whole, with the space it reclaimed, even when it
+# removed nothing
+t GET "events?stream=false&since=$START&filters=%7B%22type%22%3A%5B%22volume%22%5D%2C%22event%22%3A%5B%22prune%22%5D%7D" 200
+is "$(jq -c '[.Actor.ID, .Actor.Attributes]' <<<"$output")" \
+   "[\"\",{\"reclaimed\":\"$reclaimed\"}]
+[\"\",{\"reclaimed\":\"0\"}]" \
+   "compat volume prune events"
+
+# the libpod endpoint keeps the volume labels and reports each pruned volume
+t GET "libpod/events?stream=false&since=$START&filters=%7B%22volume%22%3A%5B%22$vol%22%5D%2C%22event%22%3A%5B%22prune%22%5D%7D" 200 \
+  .Actor.Attributes.name=$vol \
+  '.Actor.Attributes["events-vol-label"]=1'
+
 APIV2_TEST_EXPECT_TIMEOUT=1 t GET "events?stream=true" 999
 like "$(<$WORKDIR/curl.headers.out)" ".*HTTP.* 200 OK.*" \
      "Received headers from /events"

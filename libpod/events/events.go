@@ -94,13 +94,13 @@ func (e *Event) toHumanReadable(truncate bool, omitTime bool) string {
 		if e.Error != "" {
 			humanFormat += " " + e.Error
 		}
-	case System:
+	case System, Volume:
 		if e.Name != "" {
 			humanFormat = fmt.Sprintf("%s %s", prefix, e.Name)
 		} else {
 			humanFormat = prefix
 		}
-	case Machine, Volume:
+	case Machine:
 		humanFormat = fmt.Sprintf("%s %s", prefix, e.Name)
 	case Secret:
 		humanFormat = fmt.Sprintf("%s %s", prefix, id)
