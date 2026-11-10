@@ -230,6 +230,12 @@ func convertLibpodNetworktoDockerNetwork(runtime *libpod.Runtime, statuses []abi
 		name = nettypes.BridgeNetworkDriver
 	}
 
+	// Networks created by CreateNetwork keep the options as the client sent them.
+	options := network.Options
+	if network.OpaqueOptions != nil {
+		options = network.OpaqueOptions
+	}
+
 	report := dockerNetwork.Inspect{
 		Network: dockerNetwork.Network{
 			Name:       name,
@@ -245,7 +251,7 @@ func convertLibpodNetworktoDockerNetwork(runtime *libpod.Runtime, statuses []abi
 			Ingress:    false,
 			ConfigFrom: dockerNetwork.ConfigReference{},
 			ConfigOnly: false,
-			Options:    network.Options,
+			Options:    options,
 			Labels:     network.Labels,
 			Peers:      nil,
 		},
@@ -294,9 +300,8 @@ func ListNetworks(w http.ResponseWriter, r *http.Request) {
 
 func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 	var (
-		networkCreate   dockerNetwork.CreateRequest
-		network         nettypes.Network
-		responseWarning string
+		networkCreate dockerNetwork.CreateRequest
+		network       nettypes.Network
 	)
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 
@@ -317,6 +322,10 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	network.Options = make(map[string]string)
+	// Docker stores all the options as given and returns them on inspect,
+	// including the ones the driver doesn't use. Keep them all as opaque
+	// options, and translate the ones netavark knows to netavark options.
+	network.OpaqueOptions = networkCreate.Options
 
 	for opt, optVal := range networkCreate.Options {
 		switch opt {
@@ -336,8 +345,6 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 			if network.Driver == nettypes.MacVLANNetworkDriver || network.Driver == nettypes.IPVLANNetworkDriver {
 				network.NetworkInterface = optVal
 			}
-		default:
-			responseWarning = "\"" + opt + ": " + optVal + "\" is not a recognized option"
 		}
 	}
 
@@ -418,8 +425,7 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 		ID      string `json:"Id"`
 		Warning string `json:"Warning"`
 	}{
-		ID:      newNetwork.ID,
-		Warning: responseWarning,
+		ID: newNetwork.ID,
 	}
 	utils.WriteResponse(w, http.StatusCreated, body)
 }

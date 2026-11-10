@@ -111,6 +111,25 @@ t POST networks/create Name=net3\ CheckDuplicate=false 409
 # network delete docker
 t DELETE networks/net3 204
 
+# network create docker keeps all options, including the ones it doesn't apply,
+# and returns them with their original keys; only the mtu is applied
+t POST networks/create Name=net-opts \
+  Options='{"com.docker.network.bridge.enable_icc":"true","com.docker.network.driver.mtu":"1450","my.abc.key":"mygod"}' \
+  201 \
+  .Warning=""
+t GET networks/net-opts 200 \
+  .Options[\"com.docker.network.bridge.enable_icc\"]=true \
+  .Options[\"com.docker.network.driver.mtu\"]=1450 \
+  .Options[\"my.abc.key\"]=mygod \
+  .Options.mtu=null
+t GET networks?filters='{"name":["net-opts"]}' 200 \
+  length=1 \
+  .[0].Options[\"my.abc.key\"]=mygod
+t GET libpod/networks/net-opts/json 200 \
+  .options.mtu=1450 \
+  .options[\"my.abc.key\"]=null
+t DELETE networks/net-opts 204
+
 #compat api list networks sanity checks
 t GET networks?filters='garb1age}' 500 \
     .cause="invalid character 'g' looking for beginning of value"
