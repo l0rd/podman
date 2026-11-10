@@ -420,6 +420,12 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 		if tmpdir, err := podmanConfig.ContainersConfDefaultsRO.ImageCopyTmpDir(); err != nil {
 			logrus.Warnf("Failed to retrieve default tmp dir: %v", err)
 		} else {
+			// The "storage" directory is inside the graph root, which may not have been created yet.
+			if podmanConfig.ContainersConfDefaultsRO.Engine.ImageCopyTmpDir == "storage" {
+				if err := os.MkdirAll(tmpdir, 0o700); err != nil {
+					logrus.Warnf("Failed to create tmp dir %q: %v", tmpdir, err)
+				}
+			}
 			os.Setenv("TMPDIR", tmpdir)
 		}
 	}
