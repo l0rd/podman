@@ -76,6 +76,26 @@ t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/myrepo&tag=quiet-
 t POST "images/localhost:$REGISTRY_PORT/idonotexist/push?tlsVerify=false" 404   .message="An image does not exist locally with the tag: localhost:$REGISTRY_PORT/idonotexist"
 t POST "images/idonotexist/push?tag=latest" 404   .message="An image does not exist locally with the tag: idonotexist"
 
+# Compat push with no tag pushes all local tags of exactly that repository,
+# with one status line and aux trailer per tag
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/pushall&tag=v1" 201
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/pushall&tag=v2" 201
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/pushall-other&tag=v3" 201
+t POST "images/localhost:$REGISTRY_PORT/pushall/push?tlsVerify=false" 200
+readarray lines <<<"$output"
+is "$(jq -r .status <<<"${lines[0]}")" "The push refers to repository [localhost:$REGISTRY_PORT/pushall]" \
+   "Push all tags: first status line"
+statuses=$(jq -r 'select(.aux) | "\(.aux.Tag) \(.status)"' <<<"$output" | sed -e 's/sha256:[0-9a-f]\{64\} size: [0-9]\+/DIGEST/')
+is "$statuses" "v1 v1: digest: DIGEST
+v2 v2: digest: DIGEST" "Push all tags: one status line and aux per tag"
+is "$(skopeo list-tags --tls-verify=false docker://localhost:$REGISTRY_PORT/pushall | jq -c '.Tags | sort')" '["v1","v2"]' \
+   "Push all tags: tags in the registry"
+is "$(skopeo list-tags --tls-verify=false docker://localhost:$REGISTRY_PORT/pushall-other 2>/dev/null)" "" \
+   "Push all tags: other repository not pushed"
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/pushall&tag=v1" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/pushall&tag=v2" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/pushall-other&tag=v3" 201
+
 # Compat pull with an empty tag and no tag or digest in fromImage pulls all tags
 t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/alltags&tag=v1" 201
 t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/alltags&tag=v2" 201

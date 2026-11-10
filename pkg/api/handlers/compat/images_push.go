@@ -3,10 +3,12 @@
 package compat
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/moby/moby/api/types/jsonstream"
@@ -71,7 +73,8 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 	// Note that Docker's docs state "Image name or ID" to be in the path
 	// parameter but it really must be a name as Docker does not allow for
 	// pushing an image by ID.
-	imageName := strings.TrimSuffix(utils.GetName(r), "/push") // GetName returns the entire path
+	pathName := strings.TrimSuffix(utils.GetName(r), "/push") // GetName returns the entire path
+	imageName := pathName
 	if query.Tag != "" {
 		imageName += ":" + query.Tag
 	}
@@ -87,24 +90,57 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	imageName = possiblyNormalizedName
+
+	type pushItem struct {
+		name         string
+		tag          string
+		manifestSize int
+	}
+	tag := query.Tag
+	if tag == "" {
+		tag = "latest"
+	}
+	items := []pushItem{{name: imageName, tag: tag}}
+	repoName := imageName
+	_, destinationFound := r.URL.Query()["destination"]
+	if query.Tag == "" && !destinationFound {
+		// Docker pushes all local tags of the repository when neither the
+		// path nor the query has a tag.
+		name, tags, err := localRepositoryTags(r.Context(), runtime, pathName)
+		if err != nil {
+			utils.InternalServerError(w, fmt.Errorf("listing local tags of %s: %w", pathName, err))
+			return
+		}
+		if len(tags) > 0 {
+			repoName = name
+			items = items[:0]
+			for _, t := range tags {
+				items = append(items, pushItem{name: name + ":" + t, tag: t})
+			}
+		}
+	}
+
 	lookupOptions := &libimage.LookupImageOptions{
 		OS:           platformOS,
 		Architecture: platformArch,
 		Variant:      platformVariant,
 	}
-	localImage, _, err := runtime.LibimageRuntime().LookupImage(possiblyNormalizedName, lookupOptions)
-	if err != nil {
-		if errors.Is(err, storage.ErrImageUnknown) {
-			utils.Error(w, http.StatusNotFound, imageNotExistLocallyError(imageName))
+	for i := range items {
+		localImage, _, err := runtime.LibimageRuntime().LookupImage(items[i].name, lookupOptions)
+		if err != nil {
+			if errors.Is(err, storage.ErrImageUnknown) {
+				utils.Error(w, http.StatusNotFound, imageNotExistLocallyError(items[i].name))
+				return
+			}
+			utils.InternalServerError(w, fmt.Errorf("failed to find image %s: %w", items[i].name, err))
 			return
 		}
-		utils.InternalServerError(w, fmt.Errorf("failed to find image %s: %w", imageName, err))
-		return
-	}
-	rawManifest, _, err := localImage.Manifest(r.Context())
-	if err != nil {
-		utils.Error(w, http.StatusBadRequest, err)
-		return
+		rawManifest, _, err := localImage.Manifest(r.Context())
+		if err != nil {
+			utils.Error(w, http.StatusBadRequest, err)
+			return
+		}
+		items[i].manifestSize = len(rawManifest)
 	}
 
 	authconf, authfile, err := auth.GetCredentials(r)
@@ -135,13 +171,6 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 		options.SkipTLSVerify = types.NewOptionalBool(!query.TLSVerify)
 	}
 
-	var destination string
-	if _, found := r.URL.Query()["destination"]; found {
-		destination = query.Destination
-	} else {
-		destination = imageName
-	}
-
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(true)
 
@@ -164,7 +193,7 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 	writeReference := func() {
 		if !referenceWritten {
 			var report jsonstream.Message
-			report.Status = fmt.Sprintf("The push refers to repository [%s]", imageName)
+			report.Status = fmt.Sprintf("The push refers to repository [%s]", repoName)
 			if err := enc.Encode(report); err != nil {
 				logrus.Warnf("Failed to json encode error %q", err.Error())
 			}
@@ -173,13 +202,26 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pushErrChan := make(chan error)
-	var pushReport *entities.ImagePushReport
+	type pushResult struct {
+		item   pushItem
+		report *entities.ImagePushReport
+		err    error
+	}
+	pushResults := make(chan pushResult)
 	go func() {
-		var err error
-		pushReport, err = imageEngine.Push(r.Context(), imageName, destination, options)
-		pushErrChan <- err
+		for _, item := range items {
+			destination := item.name
+			if destinationFound {
+				destination = query.Destination
+			}
+			report, err := imageEngine.Push(r.Context(), item.name, destination, options)
+			pushResults <- pushResult{item: item, report: report, err: err}
+			if err != nil {
+				return
+			}
+		}
 	}()
+	pushed := 0
 
 loop: // break out of for/select infinite loop
 	for {
@@ -218,13 +260,13 @@ loop: // break out of for/select infinite loop
 				logrus.Warnf("Failed to json encode error %q", err.Error())
 			}
 			flush()
-		case err := <-pushErrChan:
-			if err != nil {
+		case res := <-pushResults:
+			if err := res.err; err != nil {
 				code := http.StatusInternalServerError
 				if errors.Is(err, storage.ErrImageUnknown) {
 					// Image may have been removed in the meantime.
 					code = http.StatusNotFound
-					err = imageNotExistLocallyError(imageName)
+					err = imageNotExistLocallyError(res.item.name)
 				}
 				if !statusWritten {
 					utils.Error(w, code, err)
@@ -248,14 +290,9 @@ loop: // break out of for/select infinite loop
 				writeReference() // There may not be any progress, so make sure the reference gets written
 			}
 
-			tag := query.Tag
-			if tag == "" {
-				tag = "latest"
-			}
-
 			var digestStr string
-			if pushReport != nil {
-				digestStr = pushReport.ManifestDigest
+			if res.report != nil {
+				digestStr = res.report.ManifestDigest
 			}
 			// Match Docker's behaviour: emit the manifest digest as an
 			// `aux` JSON trailer at the end of the push stream so clients
@@ -265,23 +302,54 @@ loop: // break out of for/select infinite loop
 				Digest string `json:"Digest"`
 				Size   int    `json:"Size"`
 			}{
-				Tag:    tag,
+				Tag:    res.item.tag,
 				Digest: digestStr,
-				Size:   len(rawManifest),
+				Size:   res.item.manifestSize,
 			})
 			if auxErr == nil {
 				raw := json.RawMessage(auxPayload)
 				report.Aux = &raw
 			}
-			report.Status = fmt.Sprintf("%s: digest: %s size: %d", tag, digestStr, len(rawManifest))
+			report.Status = fmt.Sprintf("%s: digest: %s size: %d", res.item.tag, digestStr, res.item.manifestSize)
 			if err := enc.Encode(report); err != nil {
 				logrus.Warnf("Failed to json encode error %q", err.Error())
 			}
 
 			flush()
-			break loop // break out of for/select infinite loop
+			pushed++
+			if pushed == len(items) {
+				break loop // break out of for/select infinite loop
+			}
 		}
 	}
+}
+
+// localRepositoryTags returns the normalized repository of name and the
+// sorted tags of its local images.  It returns no tags if name is not a bare
+// repository name, i.e. it has a tag or a digest.
+func localRepositoryTags(ctx context.Context, runtime *libpod.Runtime, name string) (string, []string, error) {
+	named, err := reference.ParseNormalizedNamed(name)
+	if err != nil || !reference.IsNameOnly(named) {
+		return "", nil, nil //nolint:nilerr // the caller reports invalid names
+	}
+	images, err := runtime.LibimageRuntime().ListImages(ctx, &libimage.ListImagesOptions{})
+	if err != nil {
+		return "", nil, err
+	}
+	var tags []string
+	for _, img := range images {
+		repoTags, err := img.NamedTaggedRepoTags()
+		if err != nil {
+			return "", nil, err
+		}
+		for _, repoTag := range repoTags {
+			if repoTag.Name() == named.Name() {
+				tags = append(tags, repoTag.Tag())
+			}
+		}
+	}
+	slices.Sort(tags)
+	return named.Name(), tags, nil
 }
 
 // imageNotExistLocallyError returns the error Docker reports when the image to

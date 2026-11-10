@@ -282,7 +282,9 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: tag
 	//    type: string
-	//    description: The tag to associate with the image on the registry.
+	//    description: |
+	//      The tag to associate with the image on the registry.
+	//      If no tag is given here or in the name, all local tags of the repository are pushed.
 	//  - in: query
 	//    name: all
 	//    type: boolean
