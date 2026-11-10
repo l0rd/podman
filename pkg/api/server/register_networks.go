@@ -19,7 +19,8 @@ func (s *APIServer) registerNetworkHandlers(r *mux.Router) error {
 	// description: |
 	//   Remove a network. Without force, the containers that use the network
 	//   and are not running are disconnected from it, and the removal fails if
-	//   one of them is running.
+	//   one of them is running. The pre-defined bridge, host and none networks
+	//   cannot be removed.
 	// parameters:
 	//  - in: path
 	//    name: name

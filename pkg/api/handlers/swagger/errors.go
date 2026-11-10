@@ -72,7 +72,7 @@ type networkConnectedError struct {
 	Body errorhandling.ErrorModel
 }
 
-// Network is used by a running container
+// Network is used by a running container, or is a pre-defined network
 // swagger:response
 type networkInUseError struct {
 	// in:body
