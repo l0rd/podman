@@ -420,6 +420,9 @@ func createContainerOptions(rt *libpod.Runtime, s *specgen.SpecGenerator, pod *l
 	if s.BaseHostsFile != "" {
 		options = append(options, libpod.WithBaseHostsFile(s.BaseHostsFile))
 	}
+	if s.NoHostContainersInternalEntry {
+		options = append(options, libpod.WithNoHostContainersInternalEntry())
+	}
 
 	if s.IsPrivileged() {
 		options = append(options, libpod.WithMountAllDevices())

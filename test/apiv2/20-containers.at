@@ -935,6 +935,28 @@ stop_service
 rm -rf "$testdir"
 start_service
 
+# Docker writes neither host.containers.internal nor host.docker.internal to
+# /etc/hosts, but host-gateway in ExtraHosts must still resolve.
+for endpoint in containers/create libpod/containers/create; do
+  if [[ $endpoint = containers/create ]]; then
+    t POST $endpoint Image=$IMAGE Cmd='["cat","/etc/hosts"]' Tty=true       HostConfig='{"ExtraHosts":["gw.test:host-gateway"]}' 201
+  else
+    t POST $endpoint image=$IMAGE command='["cat","/etc/hosts"]' terminal=true       hostadd='["gw.test:host-gateway"]' 201
+  fi
+  cid=$(jq -r '.Id' <<<"$output")
+  t POST containers/${cid}/start 204
+  t POST containers/${cid}/wait 200
+  t GET "containers/${cid}/logs?stdout=true" 200
+  hosts=$(<$WORKDIR/curl.result.out)
+  like "$hosts" ".*[[:space:]]gw.test.*" "$endpoint: host-gateway entry"
+  if [[ $endpoint = containers/create ]]; then
+    is "$(grep -c 'host.containers.internal' <<<"$hosts")" "0" "$endpoint: no host.containers.internal entry"
+  else
+    like "$hosts" ".*host.containers.internal host.docker.internal.*" "$endpoint: host.containers.internal entry"
+  fi
+  t DELETE containers/$cid 204
+done
+
 # Our states are different from Docker's.
 # Regression test for #14700 (Docker compat returning unknown "initialized" for status.status) to ensure the stay compatible
 podman create --name status-test $IMAGE sh -c "sleep 3"

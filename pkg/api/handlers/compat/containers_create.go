@@ -199,6 +199,8 @@ func CreateContainer(w http.ResponseWriter, r *http.Request) {
 	if rtc.Containers.BaseHostsFile == "" {
 		sg.BaseHostsFile = "none"
 	}
+	// moby adds host.docker.internal only with --add-host, so the name is left to DNS
+	sg.NoHostContainersInternalEntry = true
 
 	ic := abi.ContainerEngine{Libpod: runtime}
 	report, err := ic.ContainerCreate(r.Context(), sg)

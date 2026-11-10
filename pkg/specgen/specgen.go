@@ -574,6 +574,11 @@ type ContainerNetworkConfig struct {
 	// Conflicts with UseImageHosts.
 	// Optional.
 	HostAdd []string `json:"hostadd,omitempty"`
+	// NoHostContainersInternalEntry indicates that the host.containers.internal
+	// and host.docker.internal entry is not added to /etc/hosts.
+	// host-gateway in HostAdd is still resolved.
+	// Optional.
+	NoHostContainersInternalEntry bool `json:"no_host_containers_internal_entry,omitempty"`
 	// NetworkOptions are additional options for each network
 	// Optional.
 	NetworkOptions map[string][]string `json:"network_options,omitempty"`

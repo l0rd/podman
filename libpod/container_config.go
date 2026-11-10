@@ -294,6 +294,9 @@ type ContainerNetworkConfig struct {
 	// Hosts to add in container
 	// Will be appended to host's host file
 	HostAdd []string `json:"hostsAdd,omitempty"`
+	// NoHostContainersInternalEntry indicates that the host.containers.internal
+	// and host.docker.internal entry is not added to /etc/hosts.
+	NoHostContainersInternalEntry bool `json:"noHostContainersInternalEntry,omitempty"`
 	// Network names with the network specific options.
 	// Please note that these can be altered at runtime. The actual list is
 	// stored in the DB and should be retrieved from there via c.networks()

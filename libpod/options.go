@@ -2287,6 +2287,20 @@ func WithGroupEntry(groupEntry string) CtrCreateOption {
 	}
 }
 
+// WithNoHostContainersInternalEntry tells the container not to add the
+// host.containers.internal and host.docker.internal entry to /etc/hosts.
+func WithNoHostContainersInternalEntry() CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+
+		ctr.config.NoHostContainersInternalEntry = true
+
+		return nil
+	}
+}
+
 // WithBaseHostsFile sets the option to copy /etc/hosts file.
 func WithBaseHostsFile(baseHostsFile string) CtrCreateOption {
 	return func(ctr *Container) error {
