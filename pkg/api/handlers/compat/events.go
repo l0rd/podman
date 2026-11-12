@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	jsoniter "github.com/json-iterator/go"
+	dockerEvents "github.com/moby/moby/api/types/events"
 	"github.com/sirupsen/logrus"
 	"go.podman.io/podman/v6/libpod"
 	"go.podman.io/podman/v6/libpod/events"
@@ -174,6 +175,11 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 				// on die and exec_die events.
 				delete(e.Actor.Attributes, "podId")
 				delete(e.Actor.Attributes, "containerExitCode")
+				// Docker reports the health status in the action.
+				if evt.Event.Status == events.HealthStatus {
+					e.Action = dockerEvents.Action(string(events.HealthStatus) + ": " + evt.Event.HealthStatus)
+					e.Status = string(e.Action) //nolint:staticcheck // deprecated field
+				}
 				switch evt.Event.Type {
 				case events.Network:
 					toDockerNetworkEvent(evt.Event, e)

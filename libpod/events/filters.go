@@ -26,6 +26,12 @@ func generateEventFilter(filter, filterValue string) (func(e *Event) bool, error
 		if filterValue == "die" { // Docker compat
 			filterValue = "died"
 		}
+		// Docker compat: Docker reports health checks as "health_status: <status>".
+		if healthStatus, ok := strings.CutPrefix(filterValue, string(HealthStatus)+": "); ok {
+			return func(e *Event) bool {
+				return e.Status == HealthStatus && e.HealthStatus == healthStatus
+			}, nil
+		}
 		return func(e *Event) bool {
 			return string(e.Status) == filterValue
 		}, nil

@@ -119,6 +119,22 @@ t GET "libpod/events?stream=false&since=$START&filters=%7B%22volume%22%3A%5B%22$
   .Actor.Attributes.name=$vol \
   '.Actor.Attributes["events-vol-label"]=1'
 
+# compat health events report the status in the action, like Docker, and can
+# be filtered by it
+START=$(date +%s.%N)
+podman run -d --name events-hc-ctr --health-cmd true --health-interval disable $IMAGE top
+podman healthcheck run events-hc-ctr
+t GET "events?stream=false&since=$START&filters=%7B%22event%22%3A%5B%22health_status%3A%20healthy%22%5D%7D" 200 \
+  '.Action=health_status: healthy' \
+  .Actor.Attributes.name=events-hc-ctr
+t GET "events?stream=false&since=$START&filters=%7B%22event%22%3A%5B%22health_status%3A%20unhealthy%22%5D%7D" 200
+is "$output" "" "no unhealthy events"
+# the libpod endpoint keeps the action and reports the status separately
+t GET "libpod/events?stream=false&since=$START&filters=%7B%22event%22%3A%5B%22health_status%22%5D%7D" 200 \
+  .Action=health_status \
+  .HealthStatus=healthy
+podman rm -f -t0 events-hc-ctr
+
 APIV2_TEST_EXPECT_TIMEOUT=1 t GET "events?stream=true" 999
 like "$(<$WORKDIR/curl.headers.out)" ".*HTTP.* 200 OK.*" \
      "Received headers from /events"

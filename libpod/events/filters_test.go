@@ -108,3 +108,23 @@ func TestGenerateEventFilter_KnownFilters(t *testing.T) {
 		})
 	}
 }
+
+// TestGenerateEventFilter_HealthStatus checks Docker's form of the health
+// event filter, which includes the status.
+func TestGenerateEventFilter_HealthStatus(t *testing.T) {
+	healthy := &Event{Type: Container, Status: HealthStatus, HealthStatus: "healthy"}
+	unhealthy := &Event{Type: Container, Status: HealthStatus, HealthStatus: "unhealthy"}
+	start := &Event{Type: Container, Status: Start}
+
+	filter, err := generateEventFilter("event", "health_status: healthy")
+	require.NoError(t, err)
+	require.True(t, filter(healthy))
+	require.False(t, filter(unhealthy))
+	require.False(t, filter(start))
+
+	filter, err = generateEventFilter("event", "health_status")
+	require.NoError(t, err)
+	require.True(t, filter(healthy))
+	require.True(t, filter(unhealthy))
+	require.False(t, filter(start))
+}
