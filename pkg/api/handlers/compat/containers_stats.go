@@ -45,6 +45,22 @@ func StatsContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Like Docker, report empty stats for a single sample of a container
+	// that is not running, so clients that list the stats of all
+	// containers (docker stats --all --no-stream) also get the stopped ones.
+	// The libpod endpoint keeps reporting the error.
+	if !query.Stream && !utils.IsLibpodRequest(r) {
+		state, err := ctnr.State()
+		if err != nil {
+			utils.Error(w, statsErrorStatus(err), err)
+			return
+		}
+		if state != define.ContainerStateRunning && state != define.ContainerStatePaused {
+			utils.WriteResponse(w, http.StatusOK, DockerStatsJSON{Name: ctnr.Name(), ID: ctnr.ID()})
+			return
+		}
+	}
+
 	stats, err := ctnr.GetContainerStats(nil)
 	if err != nil {
 		err = fmt.Errorf("failed to obtain Container %s stats: %w", name, err)
