@@ -175,8 +175,12 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 				// on die and exec_die events.
 				delete(e.Actor.Attributes, "podId")
 				delete(e.Actor.Attributes, "containerExitCode")
-				// Docker reports the health status in the action.
+				// Docker reports a health check only when it changes the
+				// health status, with the status in the action.
 				if evt.Event.Status == events.HealthStatus {
+					if !evt.Event.HealthStatusChanged {
+						continue
+					}
 					e.Action = dockerEvents.Action(string(events.HealthStatus) + ": " + evt.Event.HealthStatus)
 					e.Status = string(e.Action) //nolint:staticcheck // deprecated field
 				}

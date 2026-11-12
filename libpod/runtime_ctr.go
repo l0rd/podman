@@ -620,7 +620,7 @@ func (r *Runtime) setupContainer(ctx context.Context, ctr *Container) (_ *Contai
 	}
 
 	if ctr.runtime.config.Engine.EventsContainerCreateInspectData {
-		if err := ctr.newContainerEventWithInspectData(events.Create, define.HealthCheckResults{}, true, nil); err != nil {
+		if err := ctr.newContainerEventWithInspectData(events.Create, define.HealthCheckResults{}, false, true, nil); err != nil {
 			return nil, err
 		}
 	} else {

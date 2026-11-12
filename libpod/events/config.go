@@ -46,6 +46,9 @@ type Event struct {
 	HealthLog string `json:"health_log,omitempty"`
 	// HealthFailingStreak log of the current container
 	HealthFailingStreak int `json:"health_failing_streak,omitempty"`
+	// HealthStatusChanged is set when the health check changed the health
+	// status of the container.
+	HealthStatusChanged bool `json:"health_status_changed,omitempty"`
 	// Error code for certain events involving errors.
 	Error string `json:"error,omitempty"`
 

@@ -65,6 +65,9 @@ func (e EventJournalD) Write(ee Event) error {
 				m["PODMAN_HEALTH_LOG"] = ee.HealthLog
 			}
 			m["PODMAN_HEALTH_FAILING_STREAK"] = strconv.Itoa(ee.HealthFailingStreak)
+			if ee.HealthStatusChanged {
+				m["PODMAN_HEALTH_STATUS_CHANGED"] = "true"
+			}
 		}
 		if len(ee.Details.ContainerInspectData) > 0 {
 			m["PODMAN_CONTAINER_INSPECT_DATA"] = ee.Details.ContainerInspectData
@@ -277,6 +280,7 @@ func newEventFromJournalEntry(entry *sdjournal.JournalEntry) (*Event, error) {
 				newEvent.HealthFailingStreak = FailingStreakInt
 			}
 		}
+		newEvent.HealthStatusChanged = entry.Fields["PODMAN_HEALTH_STATUS_CHANGED"] == "true"
 		newEvent.Details.ContainerInspectData = entry.Fields["PODMAN_CONTAINER_INSPECT_DATA"]
 	case Volume:
 		if err := getLabelsFromJournal(entry, &newEvent); err != nil {

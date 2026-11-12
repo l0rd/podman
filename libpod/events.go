@@ -32,7 +32,7 @@ func (r *Runtime) newEventer() (events.Eventer, error) {
 
 // newContainerEvent creates a new event based on a container
 func (c *Container) newContainerEvent(status events.Status) {
-	if err := c.newContainerEventWithInspectData(status, define.HealthCheckResults{}, false, nil); err != nil {
+	if err := c.newContainerEventWithInspectData(status, define.HealthCheckResults{}, false, false, nil); err != nil {
 		logrus.Errorf("Unable to write container event: %v", err)
 	}
 }
@@ -40,14 +40,14 @@ func (c *Container) newContainerEvent(status events.Status) {
 // newContainerKillEvent creates a new kill event that records the signal sent
 func (c *Container) newContainerKillEvent(signal uint) {
 	attributes := map[string]string{"signal": strconv.FormatUint(uint64(signal), 10)}
-	if err := c.newContainerEventWithInspectData(events.Kill, define.HealthCheckResults{}, false, attributes); err != nil {
+	if err := c.newContainerEventWithInspectData(events.Kill, define.HealthCheckResults{}, false, false, attributes); err != nil {
 		logrus.Errorf("Unable to write container event: %v", err)
 	}
 }
 
 // newContainerHealthCheckEvent creates a new healthcheck event with the given status
-func (c *Container) newContainerHealthCheckEvent(healthCheckResult define.HealthCheckResults) {
-	if err := c.newContainerEventWithInspectData(events.HealthStatus, healthCheckResult, false, nil); err != nil {
+func (c *Container) newContainerHealthCheckEvent(healthCheckResult define.HealthCheckResults, statusChanged bool) {
+	if err := c.newContainerEventWithInspectData(events.HealthStatus, healthCheckResult, statusChanged, false, nil); err != nil {
 		logrus.Errorf("Unable to write container event: %v", err)
 	}
 }
@@ -55,7 +55,7 @@ func (c *Container) newContainerHealthCheckEvent(healthCheckResult define.Health
 // newContainerEventWithInspectData creates a new event and sets the
 // ContainerInspectData field if inspectData is set. The given attributes
 // are added to the container labels in the event attributes.
-func (c *Container) newContainerEventWithInspectData(status events.Status, healthCheckResult define.HealthCheckResults, inspectData bool, attributes map[string]string) error {
+func (c *Container) newContainerEventWithInspectData(status events.Status, healthCheckResult define.HealthCheckResults, healthStatusChanged, inspectData bool, attributes map[string]string) error {
 	e := events.NewEvent(status)
 	e.ID = c.ID()
 	e.Name = c.Name()
@@ -72,6 +72,7 @@ func (c *Container) newContainerEventWithInspectData(status events.Status, healt
 		}
 	}
 	e.HealthFailingStreak = healthCheckResult.FailingStreak
+	e.HealthStatusChanged = healthStatusChanged
 
 	e.Details = events.Details{
 		PodID:      c.PodID(),
