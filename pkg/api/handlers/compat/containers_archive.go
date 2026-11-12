@@ -3,6 +3,7 @@
 package compat
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,7 +124,12 @@ func handlePut(w http.ResponseWriter, r *http.Request, decoder *schema.Decoder, 
 	containerName := utils.GetName(r)
 	containerEngine := abi.ContainerEngine{Libpod: runtime}
 
-	copyFunc, err := containerEngine.ContainerCopyFromArchive(r.Context(), containerName, query.Path, r.Body,
+	// The copy reads the archive from the request body, so it ends when the
+	// client goes away. Don't also tie it to the request context: Go cancels
+	// that context as soon as the client shuts down its side of the
+	// connection, which clients do once they have sent the archive.
+	ctx := context.WithoutCancel(r.Context())
+	copyFunc, err := containerEngine.ContainerCopyFromArchive(ctx, containerName, query.Path, r.Body,
 		entities.CopyOptions{
 			Chown:                query.Chown,
 			NoOverwriteDirNonDir: query.NoOverwriteDirNonDir,
