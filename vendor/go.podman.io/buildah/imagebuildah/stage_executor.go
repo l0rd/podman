@@ -2039,6 +2039,16 @@ func (s *stageExecutor) execute(ctx context.Context, base string) (imgID string,
 				// If above statement is true and --output was provided
 				// then generate output manually since there is no opportunity
 				// for us to perform `commit` anywhere in the code.
+				//
+				// The working container is still based on the previous
+				// step's image, so base it on the cached image first:
+				// the output must contain the cached step's changes.
+				if len(buildOutputOptions) > 0 {
+					s.containerIDs = append(s.containerIDs, s.builder.ContainerID)
+					if _, err := s.prepare(ctx, imgID, false, true, true, define.PullNever); err != nil {
+						return "", nil, false, fmt.Errorf("preparing container from cached image for build output: %w", err)
+					}
+				}
 				// Generate build output if needed.
 				for _, buildOutputOption := range buildOutputOptions {
 					if err := s.generateBuildOutput(ctx, buildOutputOption); err != nil {

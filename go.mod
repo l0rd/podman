@@ -192,10 +192,10 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v1.1.1 // indirect
 )
 
-replace go.podman.io/common => /home/mario/git/wslc-podman-backend-repos/container-libs/common
+replace go.podman.io/common => github.com/l0rd/container-libs/common v0.66.1-0.20261110135048-ae3c9d955217
 
-replace go.podman.io/image/v5 => /home/mario/git/wslc-podman-backend-repos/container-libs/image
+replace go.podman.io/image/v5 => github.com/l0rd/container-libs/image/v5 v5.38.1-0.20261110135048-ae3c9d955217
 
-replace go.podman.io/storage => /home/mario/git/wslc-podman-backend-repos/container-libs/storage
+replace go.podman.io/storage => github.com/l0rd/container-libs/storage v1.61.1-0.20261110135048-ae3c9d955217
 
-replace go.podman.io/buildah => /home/mario/git/wslc-podman-backend-repos/buildah
+replace go.podman.io/buildah => github.com/l0rd/buildah v1.22.1-0.20261112161903-beb7da7feac1
