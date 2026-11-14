@@ -5,7 +5,10 @@ package libpod
 import (
 	"context"
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -29,21 +32,30 @@ func (r *Runtime) newEventer() (events.Eventer, error) {
 
 // newContainerEvent creates a new event based on a container
 func (c *Container) newContainerEvent(status events.Status) {
-	if err := c.newContainerEventWithInspectData(status, define.HealthCheckResults{}, false); err != nil {
+	if err := c.newContainerEventWithInspectData(status, define.HealthCheckResults{}, false, false, nil); err != nil {
+		logrus.Errorf("Unable to write container event: %v", err)
+	}
+}
+
+// newContainerKillEvent creates a new kill event that records the signal sent
+func (c *Container) newContainerKillEvent(signal uint) {
+	attributes := map[string]string{"signal": strconv.FormatUint(uint64(signal), 10)}
+	if err := c.newContainerEventWithInspectData(events.Kill, define.HealthCheckResults{}, false, false, attributes); err != nil {
 		logrus.Errorf("Unable to write container event: %v", err)
 	}
 }
 
 // newContainerHealthCheckEvent creates a new healthcheck event with the given status
-func (c *Container) newContainerHealthCheckEvent(healthCheckResult define.HealthCheckResults) {
-	if err := c.newContainerEventWithInspectData(events.HealthStatus, healthCheckResult, false); err != nil {
+func (c *Container) newContainerHealthCheckEvent(healthCheckResult define.HealthCheckResults, statusChanged bool) {
+	if err := c.newContainerEventWithInspectData(events.HealthStatus, healthCheckResult, statusChanged, false, nil); err != nil {
 		logrus.Errorf("Unable to write container event: %v", err)
 	}
 }
 
 // newContainerEventWithInspectData creates a new event and sets the
-// ContainerInspectData field if inspectData is set.
-func (c *Container) newContainerEventWithInspectData(status events.Status, healthCheckResult define.HealthCheckResults, inspectData bool) error {
+// ContainerInspectData field if inspectData is set. The given attributes
+// are added to the container labels in the event attributes.
+func (c *Container) newContainerEventWithInspectData(status events.Status, healthCheckResult define.HealthCheckResults, healthStatusChanged, inspectData bool, attributes map[string]string) error {
 	e := events.NewEvent(status)
 	e.ID = c.ID()
 	e.Name = c.Name()
@@ -60,11 +72,13 @@ func (c *Container) newContainerEventWithInspectData(status events.Status, healt
 		}
 	}
 	e.HealthFailingStreak = healthCheckResult.FailingStreak
+	e.HealthStatusChanged = healthStatusChanged
 
 	e.Details = events.Details{
 		PodID:      c.PodID(),
 		Attributes: c.Labels(),
 	}
+	maps.Copy(e.Details.Attributes, attributes)
 
 	if inspectData {
 		err := func() error {
@@ -107,6 +121,8 @@ func (c *Container) newContainerExitedEvent(exitCode int32) {
 	e.ContainerExitCode = &intExitCode
 
 	attrs := c.Labels()
+	// Docker reports how long the container ran, in whole seconds.
+	attrs["execDuration"] = strconv.Itoa(int(c.state.FinishedTime.Sub(c.state.StartedTime).Seconds()))
 	if c.state.OOMKilled {
 		e.OOMKilled = &c.state.OOMKilled
 	}
@@ -149,13 +165,32 @@ func (r *Runtime) NewNetworkEvent(status events.Status, netName, netID, netDrive
 	}
 }
 
-// newNetworkEvent creates a new event based on a network connect/disconnect
+// NewNetworkPruneEvent creates a new event for a network prune as a whole
+func (r *Runtime) NewNetworkPruneEvent() {
+	e := events.NewEvent(events.Prune)
+	e.Type = events.Network
+	if err := r.eventer.Write(e); err != nil {
+		logrus.Errorf("Unable to write network event: %q", err)
+	}
+}
+
+// newNetworkEvent creates a new event based on a network connect/disconnect.
+// The network ID and driver are recorded in the attributes, as the network
+// may be gone by the time the event is read.
 func (c *Container) newNetworkEvent(status events.Status, netName string) {
 	e := events.NewEvent(status)
 	e.ID = c.ID()
 	e.Name = c.Name()
 	e.Type = events.Network
 	e.Network = netName
+	if net, err := c.runtime.network.NetworkInspect(netName); err == nil {
+		e.Attributes = map[string]string{
+			"driver":    net.Driver,
+			"networkId": net.ID,
+		}
+	} else {
+		logrus.Debugf("Unable to inspect network %s for the %s event: %v", netName, status, err)
+	}
 	if err := c.runtime.eventer.Write(e); err != nil {
 		logrus.Errorf("Unable to write pod event: %q", err)
 	}
@@ -185,11 +220,45 @@ func (r *Runtime) NewSystemEvent(status events.Status) {
 
 // newVolumeEvent creates a new event for a libpod volume
 func (v *Volume) newVolumeEvent(status events.Status) {
+	v.newVolumeEventWithAttributes(status, nil)
+}
+
+// newVolumeMountEvent creates a new event for a volume mounted into a container
+func (v *Volume) newVolumeMountEvent(ctr *Container, namedVol *ContainerNamedVolume) {
+	v.newVolumeEventWithAttributes(events.Mount, map[string]string{
+		"container":   ctr.ID(),
+		"destination": namedVol.Dest,
+		"read/write":  strconv.FormatBool(!slices.Contains(namedVol.Options, "ro")),
+	})
+}
+
+// newVolumeUnmountEvent creates a new event for a volume unmounted from a container
+func (v *Volume) newVolumeUnmountEvent(ctr *Container) {
+	v.newVolumeEventWithAttributes(events.Unmount, map[string]string{"container": ctr.ID()})
+}
+
+// newVolumeEventWithAttributes creates a new event for a libpod volume. The
+// volume driver and the given attributes are added to the volume labels in
+// the event attributes.
+func (v *Volume) newVolumeEventWithAttributes(status events.Status, attributes map[string]string) {
 	e := events.NewEvent(status)
 	e.Name = v.Name()
 	e.Type = events.Volume
 	e.Attributes = v.Labels()
+	e.Attributes["driver"] = v.Driver()
+	maps.Copy(e.Attributes, attributes)
 	if err := v.runtime.eventer.Write(e); err != nil {
+		logrus.Errorf("Unable to write volume event: %q", err)
+	}
+}
+
+// newVolumePruneEvent creates a new event for a volume prune as a whole,
+// with the space it reclaimed
+func (r *Runtime) newVolumePruneEvent(reclaimed uint64) {
+	e := events.NewEvent(events.Prune)
+	e.Type = events.Volume
+	e.Attributes = map[string]string{"reclaimed": strconv.FormatUint(reclaimed, 10)}
+	if err := r.eventer.Write(e); err != nil {
 		logrus.Errorf("Unable to write volume event: %q", err)
 	}
 }

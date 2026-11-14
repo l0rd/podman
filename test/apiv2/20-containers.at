@@ -174,6 +174,16 @@ t GET "containers/${CTRNAME}/logs?timestamps=true&stdout=true" 200
 # Timezone can be 'Z' (UTC) or '+/-HH:MM'
 like "$(tr -d \\0 <$WORKDIR/curl.result.out)" ".*[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\.[0-9]\\{9\\}\\(Z\\|[+-][0-9]\\{2\\}:[0-9]\\{2\\}\\).*test message.*" \
      "logs timestamps should include nanosecond precision"
+
+# details=true prefixes each line with the (empty) log attributes and a space,
+# after the timestamp. Skip the 8-byte stream header.
+t GET "containers/${CTRNAME}/logs?details=true&stdout=true" 200
+is "$(tail -c +9 $WORKDIR/curl.result.out | od -An -tx1 | tr -d ' \n')" \
+   "$(printf ' test message\n' | od -An -tx1 | tr -d ' \n')" \
+   "logs details prefix"
+t GET "containers/${CTRNAME}/logs?details=true&timestamps=true&stdout=true" 200
+like "$(tr -d \\0 <$WORKDIR/curl.result.out)" ".*[0-9]\\(Z\\|[+-][0-9]\\{2\\}:[0-9]\\{2\\}\\)  test message" \
+     "logs details prefix follows the timestamp"
 podman rm -f $CTRNAME
 
 CTRNAME=test123
@@ -384,13 +394,26 @@ cid_top=$(jq -r '.Id' <<<"$output")
 t GET containers/${cid_top}/json 200 \
   .Config.Entrypoint[0]="top" \
   .Config.Cmd='[]' \
-  .Config.StopTimeout="10" \
+  '.Config|has("StopTimeout")=false' \
   .Path="top" \
   .NetworkSettings.Networks.podman.NetworkID=2f259bab93aaaaa2542ba43ef33eb990d0999ee1b9924b557b7be53c0b7a1bb9
+# without StopTimeout in the request, the containers.conf default is used
+t GET libpod/containers/${cid_top}/json 200 \
+  .Config.StopTimeout=10
 t POST  containers/${cid_top}/start 204
 # make sure the container is running
 t GET containers/${cid_top}/json 200 \
   .State.Status="running"
+
+# StopTimeout is reported when set, even to the default value
+for stop_timeout in 10 0 -1; do
+    t POST containers/create Image=$IMAGE StopTimeout=$stop_timeout 201 \
+      .Id~[0-9a-f]\\{64\\}
+    cid_st=$(jq -r '.Id' <<<"$output")
+    t GET containers/$cid_st/json 200 \
+      .Config.StopTimeout=$stop_timeout
+    t DELETE containers/$cid_st 204
+done
 
 # check that gateway is empty not "<nil>", https://github.com/containers/podman/issues/28705
 podman network create testnet --ipv6 --internal --disable-dns
@@ -441,7 +464,32 @@ t GET containers/$cid/json 200 \
   .Config.WorkingDir="/dataDir" \
   .Config.StopSignal="9"
 
+# Size fields are only reported when requested
+t GET containers/$cid/json 200 \
+  'has("SizeRw")=false' \
+  'has("SizeRootFs")=false'
+t GET containers/$cid/json?size=true 200 \
+  .SizeRw~[0-9]\\+ \
+  .SizeRootFs~[0-9]\\+
+
 t DELETE containers/$cid 204
+
+# Force removal kills the container right away, ignoring its StopTimeout.
+# sleep runs as PID 1 and ignores SIGTERM, so the stop signal can't end it.
+for stop_timeout in 30 -1; do
+    t POST containers/create Image=$IMAGE Cmd='["sleep","infinity"]' StopTimeout=$stop_timeout 201 \
+      .Id~[0-9a-f]\\{64\\}
+    cid=$(jq -r '.Id' <<<"$output")
+    t POST containers/$cid/start 204
+    t0=$SECONDS
+    t DELETE containers/$cid?force=true 204
+    delta_t=$((SECONDS - t0))
+    if [ $delta_t -lt 10 ]; then
+        _show_ok 1 "force removal with StopTimeout=$stop_timeout took ${delta_t}s (< 10s)"
+    else
+        _show_ok 0 "force removal with StopTimeout=$stop_timeout took ${delta_t}s (< 10s)"
+    fi
+done
 
 # when the image had multi tags, the container's Image should be correct
 # Fixes https://github.com/containers/podman/issues/8547
@@ -462,6 +510,16 @@ t POST containers/create Image=$IMAGE Volumes='{"/test":{}}' 201 \
 cid=$(jq -r '.Id' <<<"$output")
 t GET containers/$cid/json 200 \
   .Mounts[0].Destination="/test"
+
+t DELETE containers/$cid?v=true 204
+
+# Volumes keys are container paths, resolved against "/", not -v specs
+t POST containers/create Image=$IMAGE Volumes='{":":{},"e2e_test":{},"/data/":{}}' 201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+t GET containers/$cid/json 200 \
+  '[.Mounts[].Destination] | sort | join(",")'="/:,/data,/e2e_test" \
+  '[.Mounts[].Type] | unique | join(",")'="volume"
 
 t DELETE containers/$cid?v=true 204
 
@@ -661,6 +719,18 @@ t GET containers/$cid/json 200 \
 
 t DELETE containers/$cid?v=true 204
 
+# Compat inspect has no State.Health before the first start, then an empty Log array
+t POST containers/create Image=$IMAGE Cmd='["top"]' Healthcheck='{"Test":["true"],"Interval":3600000000000}' 201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+t GET containers/$cid/json 200 \
+  .State.Health=null
+t POST containers/$cid/start 204
+t GET containers/$cid/json 200 \
+  .State.Health.Status=starting \
+  .State.Health.Log=[]
+t DELETE containers/$cid?force=true 204
+
 # Test Compat Create with healthcheck preserving arguments with spaces
 HEALTHCHECK_TMPD=$(mktemp -d podman-apiv2-test.healthcheck.XXXXXXXX)
 cat >$HEALTHCHECK_TMPD/create.json <<EOF
@@ -743,7 +813,7 @@ rm -rf $HEALTHCHECK_INHERIT_TMPD
 payload='{"Mounts":[{"Type":"tmpfs","Target":"/mnt/scratch","TmpfsOptions":{"SizeBytes":1024,"Mode":493}}]}'
 t POST containers/create Image=$IMAGE HostConfig="$payload" 201 .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
-t GET containers/$cid/json 200 \
+t GET libpod/containers/$cid/json 200 \
     .HostConfig.Tmpfs['"/mnt/scratch"']~.*size=1024.* \
     .HostConfig.Tmpfs['"/mnt/scratch"']~.*mode=755.*
 
@@ -753,7 +823,7 @@ t DELETE containers/$cid?v=true 204
 payload='{"Mounts":[{"Type":"tmpfs","Target":"/mnt/scratch"}]}'
 t POST containers/create Image=$IMAGE HostConfig="$payload" 201 .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
-t GET containers/$cid/json 200 \
+t GET libpod/containers/$cid/json 200 \
     .HostConfig.Tmpfs['"/mnt/scratch"']~.*tmpcopyup.* \
 
 t DELETE containers/$cid?v=true 204
@@ -864,6 +934,28 @@ like "$(<$WORKDIR/curl.result.out)" ".*10.0.0.2[[:space:]]testname.*192.168.1.1[
 stop_service
 rm -rf "$testdir"
 start_service
+
+# Docker writes neither host.containers.internal nor host.docker.internal to
+# /etc/hosts, but host-gateway in ExtraHosts must still resolve.
+for endpoint in containers/create libpod/containers/create; do
+  if [[ $endpoint = containers/create ]]; then
+    t POST $endpoint Image=$IMAGE Cmd='["cat","/etc/hosts"]' Tty=true       HostConfig='{"ExtraHosts":["gw.test:host-gateway"]}' 201
+  else
+    t POST $endpoint image=$IMAGE command='["cat","/etc/hosts"]' terminal=true       hostadd='["gw.test:host-gateway"]' 201
+  fi
+  cid=$(jq -r '.Id' <<<"$output")
+  t POST containers/${cid}/start 204
+  t POST containers/${cid}/wait 200
+  t GET "containers/${cid}/logs?stdout=true" 200
+  hosts=$(<$WORKDIR/curl.result.out)
+  like "$hosts" ".*[[:space:]]gw.test.*" "$endpoint: host-gateway entry"
+  if [[ $endpoint = containers/create ]]; then
+    is "$(grep -c 'host.containers.internal' <<<"$hosts")" "0" "$endpoint: no host.containers.internal entry"
+  else
+    like "$hosts" ".*host.containers.internal host.docker.internal.*" "$endpoint: host.containers.internal entry"
+  fi
+  t DELETE containers/$cid 204
+done
 
 # Our states are different from Docker's.
 # Regression test for #14700 (Docker compat returning unknown "initialized" for status.status) to ensure the stay compatible
@@ -1232,6 +1324,45 @@ t GET containers/dnscontainer/json 200 \
   .NetworkSettings.Networks.dnstest2.DNSNames[0]=dnscontainer \
   .NetworkSettings.Networks.dnstest2.DNSNames[1]=$short_id
 
+#
+# Test that compat create and connect keep the endpoint settings (IPAMConfig,
+# Links, DriverOpts) and return them in container inspect
+#
+podman network create --subnet 10.89.142.0/24 endpointnet
+podman network create --subnet 10.89.143.0/24 endpointnet2
+t POST containers/create?name=endpointctr Image=$IMAGE Cmd='["top"]' \
+  HostConfig='{"NetworkMode":"endpointnet"}' \
+  NetworkingConfig='{"EndpointsConfig":{"endpointnet":{"IPAMConfig":{"IPv4Address":"10.89.142.42"},"Links":["dnscontainer:db"],"DriverOpts":{"com.docker.network.endpoint.custom":"verify"}}}}' \
+  201
+t GET containers/endpointctr/json 200 \
+  .NetworkSettings.Networks.endpointnet.IPAMConfig.IPv4Address=10.89.142.42 \
+  .NetworkSettings.Networks.endpointnet.Links[0]=dnscontainer:db \
+  .NetworkSettings.Networks.endpointnet.DriverOpts[\"com.docker.network.endpoint.custom\"]=verify
+t POST containers/endpointctr/start 204
+t GET containers/endpointctr/json 200 \
+  .NetworkSettings.Networks.endpointnet.IPAddress=10.89.142.42 \
+  .NetworkSettings.Networks.endpointnet.IPAMConfig.IPv4Address=10.89.142.42 \
+  .NetworkSettings.Networks.endpointnet.Links[0]=dnscontainer:db \
+  .NetworkSettings.Networks.endpointnet.DriverOpts[\"com.docker.network.endpoint.custom\"]=verify
+t POST networks/endpointnet2/connect Container=endpointctr \
+  EndpointConfig='{"IPAMConfig":{"IPv4Address":"10.89.143.43"},"Links":["dnscontainer:db2"],"DriverOpts":{"k":"v"}}' \
+  200
+t GET containers/endpointctr/json 200 \
+  .NetworkSettings.Networks.endpointnet2.IPAddress=10.89.143.43 \
+  .NetworkSettings.Networks.endpointnet2.IPAMConfig.IPv4Address=10.89.143.43 \
+  .NetworkSettings.Networks.endpointnet2.Links[0]=dnscontainer:db2 \
+  .NetworkSettings.Networks.endpointnet2.DriverOpts.k=v
+
+# Static link-local IPs are not supported (#24931)
+t POST containers/create Image=$IMAGE HostConfig='{"NetworkMode":"endpointnet"}' \
+  NetworkingConfig='{"EndpointsConfig":{"endpointnet":{"IPAMConfig":{"LinkLocalIPs":["169.254.11.6"]}}}}' \
+  400 \
+  .message~'.*IPAMConfig.LinkLocalIPs is not supported.*'
+t POST networks/endpointnet2/connect Container=dnscontainer \
+  EndpointConfig='{"IPAMConfig":{"LinkLocalIPs":["169.254.11.7"]}}' \
+  400 \
+  .message~'.*IPAMConfig.LinkLocalIPs is not supported.*'
+
 # cleanup
-podman rm -f dnscontainer
-podman network rm -f dnstest dnstest2
+podman rm -f dnscontainer endpointctr
+podman network rm -f dnstest dnstest2 endpointnet endpointnet2

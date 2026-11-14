@@ -110,7 +110,7 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//     type: string
 	//   - name: digests
 	//     in: query
-	//     description: Not supported
+	//     description: Show digest information as a RepoDigests field on each image. Ignored, RepoDigests is always included.
 	//     type: boolean
 	//     default: false
 	//   - name: shared-size
@@ -123,6 +123,8 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	// responses:
 	//   200:
 	//     $ref: "#/responses/imageList"
+	//   400:
+	//     $ref: "#/responses/badParamError"
 	//   500:
 	//     $ref: '#/responses/internalError'
 	r.Handle(VersionedPath("/images/json"), s.APIHandler(compat.GetImages)).Methods(http.MethodGet)
@@ -280,7 +282,9 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: tag
 	//    type: string
-	//    description: The tag to associate with the image on the registry.
+	//    description: |
+	//      The tag to associate with the image on the registry.
+	//      If no tag is given here or in the name, all local tags of the repository are pushed.
 	//  - in: query
 	//    name: all
 	//    type: boolean
@@ -992,6 +996,8 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	// responses:
 	//   200:
 	//     $ref: "#/responses/imageListLibpod"
+	//   400:
+	//     $ref: "#/responses/badParamError"
 	//   500:
 	//     $ref: '#/responses/internalError'
 	r.Handle(VersionedPath("/libpod/images/json"), s.APIHandler(compat.GetImages)).Methods(http.MethodGet)

@@ -102,6 +102,70 @@ t GET networks/bridge 200 \
 t GET networks/podman 200 \
   .Name=podman
 
+# Docker's predefined host and none networks (#16092), their ID is the
+# SHA-256 of their name
+host_id=4740ae6347b0172c01254ff55bae5aff5199f4446e7f6d643d40185b3f475145
+none_id=140bedbf9c3f6d56a9846d2ba7088798683f4da0c248231336e6a05679e4fdfe
+t GET networks 200 \
+  .[].Name~.*host.* \
+  .[].Name~.*none.*
+t GET networks?filters='{"driver":["host"]}' 200 \
+  length=1 \
+  .[0].Name=host \
+  .[0].Id=$host_id \
+  .[0].Driver=host \
+  .[0].Scope=local
+t GET networks?filters='{"name":["^none$"]}' 200 \
+  length=1 \
+  .[0].Name=none \
+  .[0].Id=$none_id \
+  .[0].Driver=null
+t GET networks?filters="{\"id\":[\"${none_id:0:12}\"]}" 200 \
+  length=1 \
+  .[0].Name=none
+t GET networks?filters='{"label":["abc"]}' 200 \
+  length=1 \
+  .[0].Name=network2
+t GET networks?filters='{"dangling":["true"],"name":["host"]}' 200 \
+  length=0
+t GET networks?filters='{"dangling":["false"],"name":["host"]}' 200 \
+  length=1
+t GET networks/host 200 \
+  .Name=host \
+  .Id=$host_id \
+  .Driver=host \
+  .Scope=local \
+  .IPAM.Driver=default \
+  .Containers={}
+t GET networks/$none_id 200 \
+  .Name=none \
+  .Driver=null
+t GET networks/${host_id:0:12} 200 \
+  .Name=host
+
+t DELETE networks/host 403 \
+  .message="host is a pre-defined network and cannot be removed"
+t DELETE networks/$none_id 403 \
+  .message="none is a pre-defined network and cannot be removed"
+t DELETE networks/bridge 403 \
+  .message="bridge is a pre-defined network and cannot be removed"
+
+podman create --name predefctr $IMAGE top
+podman create --name predefhostctr --network host $IMAGE top
+t POST networks/host/connect Container=predefctr 400 \
+  .message="container cannot be disconnected from host network or connected to host network"
+t POST networks/none/connect Container=predefctr 400 \
+  .message="container cannot be connected to multiple networks with one of the networks in private (none) mode"
+t POST networks/host/connect Container=nonexistent 404
+t POST networks/host/disconnect Container=predefctr 500 \
+  .message~"container [0-9a-f]\{64\} is not connected to the network host"
+t POST networks/host/disconnect Container=predefhostctr 400 \
+  .message="container cannot be disconnected from host network or connected to host network"
+podman start predefhostctr
+t GET networks/host 200 \
+  .Containers[].Name=predefhostctr
+podman rm -f -t0 predefctr predefhostctr
+
 # network create docker
 t POST networks/create Name=net3\ IPAM='{"Config":[]}' 201
 # Since Docker API 1.44, the server always checks for duplicate networks, even
@@ -110,6 +174,25 @@ t POST networks/create Name=net3 409
 t POST networks/create Name=net3\ CheckDuplicate=false 409
 # network delete docker
 t DELETE networks/net3 204
+
+# network create docker keeps all options, including the ones it doesn't apply,
+# and returns them with their original keys; only the mtu is applied
+t POST networks/create Name=net-opts \
+  Options='{"com.docker.network.bridge.enable_icc":"true","com.docker.network.driver.mtu":"1450","my.abc.key":"mygod"}' \
+  201 \
+  .Warning=""
+t GET networks/net-opts 200 \
+  .Options[\"com.docker.network.bridge.enable_icc\"]=true \
+  .Options[\"com.docker.network.driver.mtu\"]=1450 \
+  .Options[\"my.abc.key\"]=mygod \
+  .Options.mtu=null
+t GET networks?filters='{"name":["net-opts"]}' 200 \
+  length=1 \
+  .[0].Options[\"my.abc.key\"]=mygod
+t GET libpod/networks/net-opts/json 200 \
+  .options.mtu=1450 \
+  .options[\"my.abc.key\"]=null
+t DELETE networks/net-opts 204
 
 #compat api list networks sanity checks
 t GET networks?filters='garb1age}' 500 \
@@ -207,6 +290,15 @@ t GET networks/iprange-net 200 \
 # clean up
 t DELETE networks/iprange-net 204
 
+# IPRange must be inside its Subnet
+t POST networks/create Name='"iprange-bad"' \
+  IPAM='{"Config":[{"Subnet":"10.10.201.0/24","IPRange":"10.0.0.0/24"}]}' 400 \
+  .cause="invalid ip-range 10.0.0.0/24: parent subnet 10.10.201.0/24 doesn't contain ip-range"
+t POST networks/create Name='"iprange-bad"' \
+  IPAM='{"Config":[{"Subnet":"10.10.201.0/24","IPRange":"10.10.0.0/16"}]}' 400 \
+  .cause="invalid ip-range 10.10.0.0/16: parent subnet 10.10.201.0/24 doesn't contain ip-range"
+t GET networks/iprange-bad 404
+
 #
 # test networks with containers
 #
@@ -255,5 +347,50 @@ t POST networks/netcon/connect Container=c1 200 OK
 
 # cleanup
 podman network rm -f netcon
+
+#
+# A container disconnected from its only network has an empty Networks map, not null
+#
+podman network create netnone
+podman run -d --network netnone --name cnetnone $IMAGE top
+t POST networks/netnone/disconnect Container=cnetnone 200 OK
+t GET containers/json?filters='{"name":["cnetnone"]}' 200 \
+  length=1 \
+  .[0].NetworkSettings.Networks={}
+t GET containers/cnetnone/json 200 \
+  .NetworkSettings.Networks={}
+
+# cleanup
+podman rm -f -t0 cnetnone
+podman network rm netnone
+
+#
+# Test removing a network that containers use: like Docker, refuse it only
+# while one of them is running, and disconnect the ones that are not running
+#
+podman network create netrm
+podman network create netrm2
+podman create --network netrm --name netrm-created $IMAGE top
+podman create --network netrm,netrm2 --name netrm-multi $IMAGE top
+podman run --network netrm --name netrm-exited $IMAGE true
+podman run -d --network netrm --name netrm-running $IMAGE top
+
+t DELETE networks/netrm 403 \
+  .message~'error while removing network: network netrm id [0-9a-f]\{64\} has active endpoints'
+t GET networks/netrm 200
+
+podman rm -f -t0 netrm-running
+t DELETE networks/netrm 204
+t GET networks/netrm 404
+t GET containers/netrm-multi/json 200 \
+  .NetworkSettings.Networks.netrm=null \
+  .NetworkSettings.Networks.netrm2.NetworkID~[0-9a-f]\\{64\\}
+t POST containers/netrm-multi/start 204
+t GET containers/netrm-exited/json 200 \
+  .NetworkSettings.Networks.netrm=null
+
+# cleanup
+podman rm -f -t0 netrm-created netrm-multi netrm-exited
+podman network rm netrm2
 
 # vim: filetype=sh

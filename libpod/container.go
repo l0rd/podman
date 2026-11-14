@@ -605,6 +605,13 @@ func (c *Container) UserVolumes() []string {
 	return volumes
 }
 
+// CompatMounts returns the HostConfig.Mounts list of the Docker API create
+// request, encoded as Docker API JSON. It is empty if the container was not
+// created through the Docker API or the request had no HostConfig.Mounts.
+func (c *Container) CompatMounts() []byte {
+	return slices.Clone(c.config.CompatMounts)
+}
+
 // Entrypoint is the container's entrypoint.
 // This is not added to the spec, but is instead used during image commit.
 func (c *Container) Entrypoint() []string {
@@ -645,6 +652,12 @@ func (c *Container) StopSignal() uint {
 // will be used after this timeout
 func (c *Container) StopTimeout() uint {
 	return c.config.StopTimeout
+}
+
+// DefaultStopTimeout returns true if no stop timeout was given when the
+// container was created, so StopTimeout returns the engine default.
+func (c *Container) DefaultStopTimeout() bool {
+	return c.config.DefaultStopTimeout
 }
 
 // CreatedTime gets the time when the container was created

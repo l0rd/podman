@@ -14,6 +14,7 @@ import (
 	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/podman/v6/libpod/define"
 	"go.podman.io/podman/v6/libpod/events"
+	"go.podman.io/storage"
 )
 
 // Runtime API
@@ -51,6 +52,9 @@ func (r *Runtime) RemoveContainersForImageCallback(ctx context.Context, force bo
 					Timeout: timeout,
 				}
 				if _, _, err := r.removeContainer(ctx, ctr, opts); err != nil {
+					if !force && errors.Is(err, define.ErrCtrStateInvalid) {
+						err = fmt.Errorf("%w: %w", storage.ErrImageUsedByContainer, err)
+					}
 					return fmt.Errorf("removing image %s: container %s using image could not be removed: %w", imageID, ctr.ID(), err)
 				}
 			}

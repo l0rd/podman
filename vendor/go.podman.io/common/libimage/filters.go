@@ -23,6 +23,9 @@ type filterFunc func(*Image, *layerTree) (bool, error)
 
 type compiledFilters map[string][]filterFunc
 
+// ErrUnknownFilter is returned (wrapped) by ListImages when a filter key is not supported.
+var ErrUnknownFilter = errors.New("unknown filter")
+
 // Apply the specified filters.  All filters of each key must apply.
 // tree must be provided if compileImageFilters indicated it is necessary.
 // WARNING: Application of filterReferences sets the image names to matched names, but this only affects the values in memory, they are not written to storage.
@@ -179,7 +182,7 @@ func (r *Runtime) compileImageFilters(ctx context.Context, options *ListImagesOp
 			filter = filterBefore(until)
 
 		default:
-			return nil, false, fmt.Errorf(filterInvalidValue, key)
+			return nil, false, fmt.Errorf("invalid image filter %q: %w", key, ErrUnknownFilter)
 		}
 		if negate {
 			filter = negateFilter(filter)

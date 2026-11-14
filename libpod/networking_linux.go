@@ -14,6 +14,7 @@ import (
 	"go.podman.io/common/pkg/config"
 	"go.podman.io/common/pkg/netns"
 	"go.podman.io/podman/v6/libpod/define"
+	"go.podman.io/podman/v6/libpod/events"
 	"go.podman.io/podman/v6/pkg/rootless"
 )
 
@@ -88,6 +89,11 @@ func (r *Runtime) configureNetNS(ctr *Container, ctrNS string, reload bool) (sta
 		default:
 			err = fmt.Errorf("invalid rootless_port_forwarder value %q, must be %q or %q",
 				r.config.Network.RootlessPortForwarder, config.RootlessPortForwarderRootlessport, config.RootlessPortForwarderPasta)
+		}
+	}
+	if err == nil {
+		for _, net := range networks {
+			ctr.newNetworkEvent(events.NetworkConnect, net.Name)
 		}
 	}
 	return netStatus, err

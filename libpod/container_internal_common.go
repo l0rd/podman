@@ -2628,11 +2628,12 @@ func (c *Container) addHosts() error {
 	})
 
 	return etchosts.New(&etchosts.Params{
-		BaseFile:                 baseHostFile,
-		ExtraHosts:               c.config.HostAdd,
-		ContainerIPs:             containerIPsEntries,
-		HostContainersInternalIP: hostContainersInternalIP,
-		TargetFile:               targetFile,
+		BaseFile:                      baseHostFile,
+		ExtraHosts:                    c.config.HostAdd,
+		ContainerIPs:                  containerIPsEntries,
+		HostContainersInternalIP:      hostContainersInternalIP,
+		NoHostContainersInternalEntry: c.config.NoHostContainersInternalEntry,
+		TargetFile:                    targetFile,
 	})
 }
 

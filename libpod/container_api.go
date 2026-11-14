@@ -394,7 +394,7 @@ func (c *Container) Kill(signal uint) error {
 
 	c.state.StoppedByUser = true
 
-	c.newContainerEvent(events.Kill)
+	c.newContainerKillEvent(signal)
 
 	// Make sure to wait for the container to exit in case of SIGKILL.
 	if signal == uint(unix.SIGKILL) {

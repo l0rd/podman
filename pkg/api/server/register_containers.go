@@ -293,6 +293,11 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    type: string
 	//    description: Only return this number of log lines from the end of the logs
 	//    default: all
+	//  - in: query
+	//    name: details
+	//    type: boolean
+	//    default: false
+	//    description: Prefix every log line with the extra attributes of the log driver and a space. Podman has no extra attributes, so the prefix is a single space.
 	// produces:
 	// - application/json
 	// responses:

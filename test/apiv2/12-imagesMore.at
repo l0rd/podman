@@ -71,8 +71,64 @@ like "$s0" "sha256:[0-9a-f]\{64\}" \
 t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/myrepo&tag=mytag" 201
 t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/myrepo&tag=quiet-false" 201
 
-# Try to push non-existing image
-t POST "images/localhost:$REGISTRY_PORT/idonotexist/push?tlsVerify=false" 404
+# Try to push non-existing image. Docker reports the familiar repository
+# name, without the tag, and clients match on this text.
+t POST "images/localhost:$REGISTRY_PORT/idonotexist/push?tlsVerify=false" 404   .message="An image does not exist locally with the tag: localhost:$REGISTRY_PORT/idonotexist"
+t POST "images/idonotexist/push?tag=latest" 404   .message="An image does not exist locally with the tag: idonotexist"
+
+# Compat push with no tag pushes all local tags of exactly that repository,
+# with one status line and aux trailer per tag
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/pushall&tag=v1" 201
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/pushall&tag=v2" 201
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/pushall-other&tag=v3" 201
+t POST "images/localhost:$REGISTRY_PORT/pushall/push?tlsVerify=false" 200
+readarray lines <<<"$output"
+is "$(jq -r .status <<<"${lines[0]}")" "The push refers to repository [localhost:$REGISTRY_PORT/pushall]" \
+   "Push all tags: first status line"
+statuses=$(jq -r 'select(.aux) | "\(.aux.Tag) \(.status)"' <<<"$output" | sed -e 's/sha256:[0-9a-f]\{64\} size: [0-9]\+/DIGEST/')
+is "$statuses" "v1 v1: digest: DIGEST
+v2 v2: digest: DIGEST" "Push all tags: one status line and aux per tag"
+is "$(skopeo list-tags --tls-verify=false docker://localhost:$REGISTRY_PORT/pushall | jq -c '.Tags | sort')" '["v1","v2"]' \
+   "Push all tags: tags in the registry"
+is "$(skopeo list-tags --tls-verify=false docker://localhost:$REGISTRY_PORT/pushall-other 2>/dev/null)" "" \
+   "Push all tags: other repository not pushed"
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/pushall&tag=v1" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/pushall&tag=v2" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/pushall-other&tag=v3" 201
+
+# Compat pull with an empty tag and no tag or digest in fromImage pulls all tags
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/alltags&tag=v1" 201
+t POST "libpod/images/$IMAGE/tag?repo=localhost:$REGISTRY_PORT/alltags&tag=v2" 201
+t POST "libpod/images/localhost:$REGISTRY_PORT/alltags:v1/push?tlsVerify=false&quiet=false" 200
+readarray lines <<<"$output"
+alltags_digest=$(jq -r .manifestdigest <<<"${lines[-1]}")
+t POST "libpod/images/localhost:$REGISTRY_PORT/alltags:v2/push?tlsVerify=false" 200
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v1" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v2" 201
+
+# The compat endpoint has no tlsVerify parameter, so mark the registry insecure
+orig_registries_conf_path=$registries_conf_path
+registries_conf_path=$WORKDIR/registries-alltags.conf
+cat $orig_registries_conf_path - >$registries_conf_path <<EOF
+[[registry]]
+location="localhost:$REGISTRY_PORT"
+insecure=true
+EOF
+stop_service
+start_service
+
+t POST "images/create?fromImage=localhost:$REGISTRY_PORT/alltags" 200
+digests=$(jq -r 'select((.status // "") | startswith("Digest: ")) | .status' <<<"$output")
+is "$digests" "Digest: $alltags_digest
+Digest: $alltags_digest" "Compat pull of all tags: one Digest line per tag"
+t GET libpod/images/localhost:$REGISTRY_PORT/alltags:v1/exists 204
+t GET libpod/images/localhost:$REGISTRY_PORT/alltags:v2/exists 204
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v1" 201
+t POST "libpod/images/$iid/untag?repo=localhost:$REGISTRY_PORT/alltags&tag=v2" 201
+
+stop_service
+registries_conf_path=$orig_registries_conf_path
+start_service
 
 t GET libpod/images/$IMAGE/json 200 \
   .RepoTags[-1]=$IMAGE

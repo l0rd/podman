@@ -18,6 +18,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/storage"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
@@ -70,6 +71,12 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		options.Volumes = query.DockerVolumes
+		// Docker kills a running container right away on force removal,
+		// without sending the stop signal or waiting for the stop timeout.
+		if query.Force {
+			timeout := uint(0)
+			options.Timeout = &timeout
+		}
 	}
 
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
@@ -449,6 +456,10 @@ func LibpodToContainer(l *libpod.Container, sz bool, includeHealth bool) (*handl
 	if err := json.Unmarshal(n, &networkSettings); err != nil {
 		return nil, err
 	}
+	// Like inspect, report a container without networks with an empty map, not null.
+	if networkSettings.Networks == nil {
+		networkSettings.Networks = map[string]*network.EndpointSettings{}
+	}
 
 	m, err := json.Marshal(inspect.Mounts)
 	if err != nil {
@@ -551,8 +562,11 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 		state.Status = "" // unknown state
 	}
 
-	if l.HasHealthCheck() {
-		state.Health = &container.Health{}
+	// Docker only reports the health state once the container has been
+	// started, and always reports the log as an array.
+	state.Health = nil
+	if l.HasHealthCheck() && !inspect.State.StartedAt.IsZero() {
+		state.Health = &container.Health{Log: []*container.HealthcheckResult{}}
 		if inspect.State.Health != nil {
 			if inspect.State.Health.Status != "" {
 				state.Health.Status = container.HealthStatus(inspect.State.Health.Status)
@@ -595,6 +609,19 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 	hc.Runtime = inspect.OCIRuntime
 	sort.Strings(hc.Binds)
 
+	// Docker returns HostConfig.Mounts as submitted at create, and does not
+	// list tmpfs mounts from HostConfig.Mounts in HostConfig.Tmpfs.
+	if compatMounts := l.CompatMounts(); len(compatMounts) > 0 {
+		if err := json.Unmarshal(compatMounts, &hc.Mounts); err != nil {
+			return nil, fmt.Errorf("decoding mounts: %w", err)
+		}
+		for _, m := range hc.Mounts {
+			if m.Type == mount.TypeTmpfs {
+				delete(hc.Tmpfs, m.Target)
+			}
+		}
+	}
+
 	// Map CgroupMode to CgroupnsMode for Docker API compatibility
 	switch inspect.HostConfig.CgroupMode {
 	case "private":
@@ -636,8 +663,10 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 			HostConfig:      &hc,
 			GraphDriver:     &graphDriver,
 			SizeRw:          inspect.SizeRw,
-			SizeRootFs:      &inspect.SizeRootFs,
 		},
+	}
+	if sz {
+		cb.SizeRootFs = &inspect.SizeRootFs
 	}
 
 	// set Path and Args
@@ -648,7 +677,10 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 	if len(processArgs) > 1 {
 		cb.Args = processArgs[1:]
 	}
-	stopTimeout := int(l.StopTimeout())
+	var stopTimeout *int
+	if !l.DefaultStopTimeout() {
+		stopTimeout = new(int(l.StopTimeout()))
+	}
 
 	var healthcheck *container.HealthConfig
 	if inspect.Config.Healthcheck != nil {
@@ -699,7 +731,7 @@ func LibpodToContainerJSON(l *libpod.Container, sz bool) (*handlers.LegacyImageI
 			OnBuild:         nil,
 			Labels:          l.Labels(),
 			StopSignal:      strconv.Itoa(int(l.StopSignal())),
-			StopTimeout:     &stopTimeout,
+			StopTimeout:     stopTimeout,
 			Shell:           nil,
 		},
 		MacAddress: "",

@@ -87,6 +87,10 @@ type Network struct {
 	// Options is a set of key-value options that have been applied to
 	// the Network.
 	Options map[string]string `json:"options,omitempty"`
+	// OpaqueOptions is a set of key-value options that are stored with the
+	// Network as given. They are neither validated nor used by the network
+	// backend, only returned on inspect.
+	OpaqueOptions map[string]string `json:"opaque_options,omitempty"`
 	// IPAMOptions contains options used for the ip assignment.
 	IPAMOptions map[string]string `json:"ipam_options,omitempty"`
 }
@@ -298,6 +302,10 @@ type PerNetworkOptions struct {
 	InterfaceName string `json:"interface_name"`
 	// Driver-specific options for this container.
 	Options map[string]string `json:"options,omitempty"`
+	// Links are Docker-style container links ("container:alias") for this
+	// network. They are stored as given and ignored by the network backend.
+	// Optional.
+	Links []string `json:"links,omitempty"`
 }
 
 // NetworkOptions for a given container.

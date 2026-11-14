@@ -739,6 +739,7 @@ func WithStopTimeout(timeout uint) CtrCreateOption {
 		}
 
 		ctr.config.StopTimeout = timeout
+		ctr.config.DefaultStopTimeout = false
 
 		return nil
 	}
@@ -1232,6 +1233,20 @@ func WithUserVolumes(volumes []string) CtrCreateOption {
 
 		ctr.config.UserVolumes = make([]string, 0, len(volumes))
 		ctr.config.UserVolumes = append(ctr.config.UserVolumes, volumes...)
+		return nil
+	}
+}
+
+// WithCompatMounts stores the HostConfig.Mounts list of a Docker API create
+// request, encoded as Docker API JSON, so the Docker-compatible inspect can
+// report it. It does not add any mount to the container.
+func WithCompatMounts(mounts []byte) CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+
+		ctr.config.CompatMounts = slices.Clone(mounts)
 		return nil
 	}
 }
@@ -2267,6 +2282,20 @@ func WithGroupEntry(groupEntry string) CtrCreateOption {
 		}
 
 		ctr.config.GroupEntry = groupEntry
+
+		return nil
+	}
+}
+
+// WithNoHostContainersInternalEntry tells the container not to add the
+// host.containers.internal and host.docker.internal entry to /etc/hosts.
+func WithNoHostContainersInternalEntry() CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+
+		ctr.config.NoHostContainersInternalEntry = true
 
 		return nil
 	}

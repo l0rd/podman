@@ -441,6 +441,36 @@ EOF
 }
 
 # bats test_tags=ci:parallel
+@test "events - kill event contains signal attribute" {
+    local cname=c-$(safename)
+    run_podman run -d --name $cname $IMAGE sleep inf
+    # PID 1 has no USR1 handler, so the signal is ignored
+    run_podman kill -s USR1 $cname
+    run_podman kill $cname
+    run_podman events \
+               --filter container=$cname \
+               --filter event=kill \
+               --stream=false \
+               --format "{{.Attributes.signal}}"
+    assert "$output" = $'10\n9' "kill events include the signal number"
+    run_podman rm -f -t0 $cname
+}
+
+# bats test_tags=ci:parallel
+@test "events - died event contains execDuration attribute" {
+    local cname=c-$(safename)
+    run_podman run -d --name $cname $IMAGE sleep 1
+    run_podman wait $cname
+    run_podman events \
+               --filter container=$cname \
+               --filter event=died \
+               --stream=false \
+               --format "{{.Attributes.execDuration}}"
+    assert "$output" =~ "^[0-9]+$" "died event includes the run time in seconds"
+    run_podman rm $cname
+}
+
+# bats test_tags=ci:parallel
 @test "events - volume events" {
     local vname=v-$(safename)
     local lname=label$(safename | tr -d -)
@@ -501,4 +531,18 @@ EOF
     # A different name must not match.
     run_podman events --since=1m --stream=false --filter network=nosuchnetwork-$(safename)
     assert "$output" = "" "no events for a non-existent network name"
+}
+
+# bats test_tags=ci:parallel
+@test "events - network prune" {
+    local netname=net-$(safename)
+    local lname=label$(safename | tr -d -)
+
+    run_podman network create --label $lname=1 $netname
+    run_podman network prune -f --filter label=$lname=1
+    assert "$output" = "$netname" "network prune removed $netname"
+
+    run_podman events --since=1m --stream=false --filter network=$netname --filter event=remove
+    assert "$output" =~ ".* network remove .*name=$netname," \
+        "network prune emits a remove event"
 }

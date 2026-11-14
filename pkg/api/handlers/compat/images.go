@@ -4,6 +4,7 @@ package compat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"go.podman.io/common/libimage"
 	"go.podman.io/common/pkg/config"
 	"go.podman.io/common/pkg/filters"
+	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/manifest"
 	"go.podman.io/podman/v6/libpod"
 	"go.podman.io/podman/v6/pkg/api/handlers"
@@ -296,6 +298,14 @@ func CreateImageFromImage(w http.ResponseWriter, r *http.Request) {
 	}
 	pullOptions.Writer = os.Stderr // allows for debugging on the server
 
+	// Docker pulls all tags of the repository when the tag is empty and
+	// fromImage has neither a tag nor a digest.
+	if query.Tag == "" {
+		if named, err := reference.ParseNormalizedNamed(query.FromImage); err == nil && reference.IsNameOnly(named) {
+			pullOptions.AllTags = true
+		}
+	}
+
 	if _, found := r.URL.Query()["retry"]; found {
 		pullOptions.MaxRetries = &query.Retry
 	}
@@ -370,6 +380,16 @@ func imageDataToImageInspect(ctx context.Context, l *libimage.Image, r *http.Req
 			StopSignal:   info.Config.StopSignal,
 		},
 	}
+	if hc := info.HealthCheck; hc != nil {
+		config.Healthcheck = &dockerSpec.HealthcheckConfig{
+			Test:          hc.Test,
+			Interval:      hc.Interval,
+			Timeout:       hc.Timeout,
+			StartPeriod:   hc.StartPeriod,
+			StartInterval: hc.StartInterval,
+			Retries:       hc.Retries,
+		}
+	}
 
 	rootfs := dockerImage.RootFS{}
 	if info.RootFS != nil {
@@ -439,7 +459,6 @@ func GetImages(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 	query := struct {
 		All        bool
-		Digests    bool
 		Filter     string // Docker 1.24 compatibility
 		SharedSize bool   `schema:"shared-size"` // Docker 1.42 compatibility
 	}{
@@ -449,10 +468,6 @@ func GetImages(w http.ResponseWriter, r *http.Request) {
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
 		utils.Error(w, http.StatusBadRequest,
 			fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
-		return
-	}
-	if _, found := r.URL.Query()["digests"]; found && query.Digests {
-		utils.UnSupportedParameter("digests")
 		return
 	}
 
@@ -483,6 +498,10 @@ func GetImages(w http.ResponseWriter, r *http.Request) {
 	listOptions := entities.ImageListOptions{All: query.All, Filter: filterList, ExtendedAttributes: utils.IsLibpodRequest(r)}
 	summaries, err := imageEngine.List(r.Context(), listOptions)
 	if err != nil {
+		if errors.Is(err, libimage.ErrUnknownFilter) {
+			utils.Error(w, http.StatusBadRequest, err)
+			return
+		}
 		utils.Error(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -565,11 +584,33 @@ func LoadImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.WriteResponse(w, http.StatusOK, struct {
-		Stream string `json:"stream"`
-	}{
-		Stream: fmt.Sprintf("Loaded image: %s", strings.Join(loadReport.Names, ",")),
-	})
+	// Like Docker, write one message per loaded image, with the familiar
+	// name, or the image ID if the archive entry has no name.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	flusher, _ := w.(http.Flusher)
+	for _, name := range loadReport.Names {
+		msg := "Loaded image: " + name
+		if strings.HasPrefix(name, "sha256:") {
+			msg = "Loaded image ID: " + name
+		} else if named, err := reference.ParseNormalizedNamed(name); err == nil {
+			msg = "Loaded image: " + reference.FamiliarString(named)
+		}
+		if err := enc.Encode(struct {
+			Stream string `json:"stream"`
+		}{
+			Stream: msg + "\n",
+		}); err != nil {
+			logrus.Errorf("Unable to write json: %q", err)
+			return
+		}
+		// Like dockerd, send each message on its own: clients may read one
+		// message per chunk of the response.
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 }
 
 func ExportImages(w http.ResponseWriter, r *http.Request) {

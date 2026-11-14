@@ -420,6 +420,9 @@ func createContainerOptions(rt *libpod.Runtime, s *specgen.SpecGenerator, pod *l
 	if s.BaseHostsFile != "" {
 		options = append(options, libpod.WithBaseHostsFile(s.BaseHostsFile))
 	}
+	if s.NoHostContainersInternalEntry {
+		options = append(options, libpod.WithNoHostContainersInternalEntry())
+	}
 
 	if s.IsPrivileged() {
 		options = append(options, libpod.WithMountAllDevices())
@@ -502,6 +505,10 @@ func createContainerOptions(rt *libpod.Runtime, s *specgen.SpecGenerator, pod *l
 
 	if len(destinations) > 0 || !infraVolumes {
 		options = append(options, libpod.WithUserVolumes(destinations))
+	}
+
+	if len(s.CompatMounts) > 0 {
+		options = append(options, libpod.WithCompatMounts(s.CompatMounts))
 	}
 
 	if len(volumes) != 0 {

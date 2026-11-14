@@ -1942,11 +1942,13 @@ func (c *Container) mountStorage(ctx context.Context) (_ string, deferredErr err
 	}
 
 	// Request a mount of all named volumes
+	mountedVols := make([]*Volume, 0, len(c.config.NamedVolumes))
 	for _, v := range c.config.NamedVolumes {
 		vol, err := c.mountNamedVolume(ctx, v, mountPoint)
 		if err != nil {
 			return "", err
 		}
+		mountedVols = append(mountedVols, vol)
 		defer func() {
 			if deferredErr == nil {
 				return
@@ -1957,6 +1959,9 @@ func (c *Container) mountStorage(ctx context.Context) (_ string, deferredErr err
 			}
 			vol.lock.Unlock()
 		}()
+	}
+	for i, vol := range mountedVols {
+		vol.newVolumeMountEvent(c, c.config.NamedVolumes[i])
 	}
 
 	return mountPoint, nil
@@ -2178,6 +2183,7 @@ func (c *Container) cleanupStorage() error {
 			}
 			vol.lock.Unlock()
 		}
+		vol.newVolumeUnmountEvent(c)
 	}
 
 	markUnmounted()

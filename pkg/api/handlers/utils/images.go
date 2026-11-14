@@ -257,6 +257,16 @@ loop: // break out of for/select infinite loop
 			} else {
 				pulledImages := pullRes.images
 				if len(pulledImages) > 0 {
+					if pullOptions.AllTags {
+						// Like Docker, report the digest of every pulled tag.
+						writeStatusCode(http.StatusOK)
+						for _, pulled := range pulledImages {
+							if err := enc.Encode(jsonstream.Message{Status: "Digest: " + pulled.Digest().String()}); err != nil {
+								logrus.Warnf("Failed to json encode error %q", err.Error())
+							}
+							flush()
+						}
+					}
 					img := pulledImages[0].ID()
 					report.Status = "Download complete"
 					report.ID = img[0:12]

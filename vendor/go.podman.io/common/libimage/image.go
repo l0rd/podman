@@ -475,6 +475,8 @@ func (i *Image) removeRecursive(ctx context.Context, rmMap map[string]*RemoveIma
 
 	skipRemove := false
 	numNames := len(i.Names())
+	byID := referencedBy != "" && strings.HasPrefix(i.ID(), referencedBy)
+	byDigest := strings.HasPrefix(referencedBy, "sha256:")
 
 	// NOTE: the `numNames != 1` check is not only a performance
 	// optimization but also preserves existing Podman/Docker behaviour.
@@ -483,8 +485,6 @@ func (i *Image) removeRecursive(ctx context.Context, rmMap map[string]*RemoveIma
 	// entire image.  If there's a container using "foo", we should get an
 	// error.
 	if referencedBy != "" && numNames != 1 {
-		byID := strings.HasPrefix(i.ID(), referencedBy)
-		byDigest := strings.HasPrefix(referencedBy, "sha256:")
 		if !options.Force {
 			if byID && numNames > 1 {
 				return processedIDs, fmt.Errorf("unable to delete image %q by ID with more than one tag (%s): please force removal", i.ID(), i.Names())
@@ -514,7 +514,14 @@ func (i *Image) removeRecursive(ctx context.Context, rmMap map[string]*RemoveIma
 
 	// Perform the container removal, if needed.
 	if err := i.removeContainers(options); err != nil {
-		return processedIDs, err
+		if !options.UntagInUse || referencedBy == "" || byID || byDigest || !errors.Is(err, storage.ErrImageUsedByContainer) {
+			return processedIDs, err
+		}
+		if err := i.Untag(referencedBy); err != nil {
+			return processedIDs, err
+		}
+		report.Untagged = append(report.Untagged, referencedBy)
+		return processedIDs, nil
 	}
 
 	// Podman/Docker compat: we only report an image as removed if it has

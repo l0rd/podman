@@ -3,11 +3,17 @@
 package compat
 
 import (
+	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
+	"strconv"
+	"strings"
 
 	nettypes "go.podman.io/common/libnetwork/types"
 	netutil "go.podman.io/common/libnetwork/util"
@@ -120,6 +126,111 @@ func normalizeNetworkName(rt *libpod.Runtime, name string) (string, bool) {
 	return name, false
 }
 
+// Docker's errors for connecting a container to the host or none network.
+var (
+	errConflictHostNetwork = errors.New("container cannot be disconnected from host network or connected to host network")
+	errConflictNoNetwork   = errors.New("container cannot be connected to multiple networks with one of the networks in private (none) mode")
+)
+
+// predefinedNetworks are the networks other than bridge that Docker always
+// has. In Podman, host and none are network modes rather than networks, so
+// the compat API reports synthetic networks for them. Like the default
+// network ID, which is the SHA-256 of "podman", their ID is the SHA-256 of
+// their name, so that it never changes and is the same on every host.
+var predefinedNetworks = []nettypes.Network{
+	newPredefinedNetwork("host", "host"),
+	newPredefinedNetwork("none", "null"),
+}
+
+func newPredefinedNetwork(name, driver string) nettypes.Network {
+	return nettypes.Network{
+		Name:   name,
+		ID:     fmt.Sprintf("%x", sha256.Sum256([]byte(name))),
+		Driver: driver,
+	}
+}
+
+// findPredefinedNetwork returns the predefined network with the name, ID or
+// ID prefix nameOrID, or nil if there is none or if nameOrID is the ID prefix
+// of a real network.
+func findPredefinedNetwork(rt *libpod.Runtime, nameOrID string) *nettypes.Network {
+	if nameOrID == "" {
+		return nil
+	}
+	for i := range predefinedNetworks {
+		network := &predefinedNetworks[i]
+		if network.Name == nameOrID {
+			return network
+		}
+		if strings.HasPrefix(network.ID, nameOrID) {
+			if _, err := rt.Network().NetworkInspect(nameOrID); err == nil {
+				return nil
+			}
+			return network
+		}
+	}
+	return nil
+}
+
+// listPredefinedNetworks returns the predefined networks that match filters.
+func listPredefinedNetworks(filters map[string][]string) ([]nettypes.Network, error) {
+	filters = maps.Clone(filters)
+	if val, ok := filters["dangling"]; ok {
+		// Docker never reports a predefined network as dangling. Invalid
+		// values are reported by the network list.
+		if len(val) == 1 {
+			if dangling, err := strconv.ParseBool(val[0]); err == nil && dangling {
+				return nil, nil
+			}
+		}
+		delete(filters, "dangling")
+	}
+	filterFuncs, err := netutil.GenerateNetworkFilters(filters)
+	if err != nil {
+		return nil, err
+	}
+	var networks []nettypes.Network
+	for _, network := range predefinedNetworks {
+		if !slices.ContainsFunc(filterFuncs, func(match nettypes.FilterFunc) bool { return !match(network) }) {
+			networks = append(networks, network)
+		}
+	}
+	return networks, nil
+}
+
+// convertPredefinedNetworkToDockerNetwork returns the Docker network of a
+// predefined network, with the given container endpoints.
+func convertPredefinedNetworkToDockerNetwork(network *nettypes.Network, containers map[string]dockerNetwork.EndpointResource) *dockerNetwork.Inspect {
+	return &dockerNetwork.Inspect{
+		Network: dockerNetwork.Network{
+			Name:    network.Name,
+			ID:      network.ID,
+			Driver:  network.Driver,
+			Scope:   "local",
+			IPAM:    dockerNetwork.IPAM{Driver: "default"},
+			Options: map[string]string{},
+			Labels:  map[string]string{},
+		},
+		Containers: containers,
+	}
+}
+
+// inspectPredefinedNetwork returns the Docker network of a predefined network,
+// with the running containers that use its network mode as endpoints.
+func inspectPredefinedNetwork(rt *libpod.Runtime, network *nettypes.Network) (*dockerNetwork.Inspect, error) {
+	ctrs, err := rt.GetRunningContainers()
+	if err != nil {
+		return nil, err
+	}
+	containers := make(map[string]dockerNetwork.EndpointResource)
+	for _, ctr := range ctrs {
+		if ctr.NetworkMode() == network.Name {
+			containers[ctr.ID()] = dockerNetwork.EndpointResource{Name: ctr.Name()}
+		}
+	}
+	return convertPredefinedNetworkToDockerNetwork(network, containers), nil
+}
+
 func InspectNetwork(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 
@@ -144,6 +255,15 @@ func InspectNetwork(w http.ResponseWriter, r *http.Request) {
 	name, changed := normalizeNetworkName(runtime, utils.GetName(r))
 	net, err := runtime.Network().NetworkInspect(name)
 	if err != nil {
+		if predefined := findPredefinedNetwork(runtime, name); predefined != nil && errors.Is(err, define.ErrNoSuchNetwork) {
+			report, err := inspectPredefinedNetwork(runtime, predefined)
+			if err != nil {
+				utils.InternalServerError(w, err)
+				return
+			}
+			utils.WriteResponse(w, http.StatusOK, report)
+			return
+		}
 		utils.NetworkNotFound(w, name, err)
 		return
 	}
@@ -230,6 +350,12 @@ func convertLibpodNetworktoDockerNetwork(runtime *libpod.Runtime, statuses []abi
 		name = nettypes.BridgeNetworkDriver
 	}
 
+	// Networks created by CreateNetwork keep the options as the client sent them.
+	options := network.Options
+	if network.OpaqueOptions != nil {
+		options = network.OpaqueOptions
+	}
+
 	report := dockerNetwork.Inspect{
 		Network: dockerNetwork.Network{
 			Name:       name,
@@ -245,7 +371,7 @@ func convertLibpodNetworktoDockerNetwork(runtime *libpod.Runtime, statuses []abi
 			Ingress:    false,
 			ConfigFrom: dockerNetwork.ConfigReference{},
 			ConfigOnly: false,
-			Options:    network.Options,
+			Options:    options,
 			Labels:     network.Labels,
 			Peers:      nil,
 		},
@@ -267,6 +393,11 @@ func ListNetworks(w http.ResponseWriter, r *http.Request) {
 		Filters: *filterMap,
 	}
 
+	predefinedNets, err := listPredefinedNetworks(*filterMap)
+	if err != nil {
+		utils.InternalServerError(w, err)
+		return
+	}
 	ic := abi.ContainerEngine{Libpod: runtime}
 	nets, err := ic.NetworkList(r.Context(), options)
 	if err != nil {
@@ -289,14 +420,18 @@ func ListNetworks(w http.ResponseWriter, r *http.Request) {
 			Network: report.Network,
 		})
 	}
+	for _, net := range predefinedNets {
+		reports = append(reports, &dockerNetwork.Summary{
+			Network: convertPredefinedNetworkToDockerNetwork(&net, nil).Network,
+		})
+	}
 	utils.WriteResponse(w, http.StatusOK, reports)
 }
 
 func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 	var (
-		networkCreate   dockerNetwork.CreateRequest
-		network         nettypes.Network
-		responseWarning string
+		networkCreate dockerNetwork.CreateRequest
+		network       nettypes.Network
 	)
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 
@@ -317,6 +452,10 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	network.Options = make(map[string]string)
+	// Docker stores all the options as given and returns them on inspect,
+	// including the ones the driver doesn't use. Keep them all as opaque
+	// options, and translate the ones netavark knows to netavark options.
+	network.OpaqueOptions = networkCreate.Options
 
 	for opt, optVal := range networkCreate.Options {
 		switch opt {
@@ -336,8 +475,6 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 			if network.Driver == nettypes.MacVLANNetworkDriver || network.Driver == nettypes.IPVLANNetworkDriver {
 				network.NetworkInterface = optVal
 			}
-		default:
-			responseWarning = "\"" + opt + ": " + optVal + "\" is not a recognized option"
 		}
 	}
 
@@ -364,6 +501,14 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 				s.Gateway = net.IP(conf.Gateway.AsSlice())
 			}
 			if conf.IPRange.IsValid() {
+				if conf.Subnet.IsValid() {
+					inSubnet := conf.IPRange.Bits() >= conf.Subnet.Bits() && conf.Subnet.Contains(conf.IPRange.Addr())
+					if !inSubnet {
+						utils.Error(w, http.StatusBadRequest,
+							fmt.Errorf("invalid ip-range %s: parent subnet %s doesn't contain ip-range", conf.IPRange, conf.Subnet))
+						return
+					}
+				}
 				_, net, err := net.ParseCIDR(conf.IPRange.String())
 				if err != nil {
 					utils.InternalServerError(w, fmt.Errorf("failed to parse ip range: %w", err))
@@ -410,8 +555,7 @@ func CreateNetwork(w http.ResponseWriter, r *http.Request) {
 		ID      string `json:"Id"`
 		Warning string `json:"Warning"`
 	}{
-		ID:      newNetwork.ID,
-		Warning: responseWarning,
+		ID: newNetwork.ID,
 	}
 	utils.WriteResponse(w, http.StatusCreated, body)
 }
@@ -438,7 +582,33 @@ func RemoveNetwork(w http.ResponseWriter, r *http.Request) {
 		Timeout: query.Timeout,
 	}
 
-	name, _ := normalizeNetworkName(runtime, utils.GetName(r))
+	name, changed := normalizeNetworkName(runtime, utils.GetName(r))
+	if predefined := findPredefinedNetwork(runtime, name); predefined != nil {
+		utils.Error(w, http.StatusForbidden, fmt.Errorf("%s is a pre-defined network and cannot be removed", predefined.Name))
+		return
+	}
+	if network, err := runtime.Network().NetworkInspect(name); err == nil && network.Name == runtime.Network().DefaultNetworkName() {
+		if changed {
+			name = nettypes.BridgeNetworkDriver
+		}
+		utils.Error(w, http.StatusForbidden, fmt.Errorf("%s is a pre-defined network and cannot be removed", name))
+		return
+	}
+	if !query.Force {
+		var err error
+		name, err = disconnectStoppedContainers(r.Context(), runtime, name)
+		if err != nil {
+			switch {
+			case errors.Is(err, define.ErrNoSuchNetwork):
+				utils.Error(w, http.StatusNotFound, err)
+			case errors.Is(err, define.ErrNetworkInUse):
+				utils.Error(w, http.StatusForbidden, err)
+			default:
+				utils.InternalServerError(w, err)
+			}
+			return
+		}
+	}
 	reports, err := ic.NetworkRm(r.Context(), []string{name}, options)
 	if err != nil {
 		utils.Error(w, http.StatusInternalServerError, err)
@@ -461,6 +631,65 @@ func RemoveNetwork(w http.ResponseWriter, r *http.Request) {
 	utils.WriteResponse(w, http.StatusNoContent, nil)
 }
 
+// disconnectStoppedContainers disconnects all the containers that are not
+// running from the network nameOrID, so that the network can be removed, and
+// returns the network name. Docker only refuses to remove a network that has
+// active endpoints: if a container that uses the network is running,
+// disconnectStoppedContainers disconnects none and fails with ErrNetworkInUse.
+func disconnectStoppedContainers(ctx context.Context, runtime *libpod.Runtime, nameOrID string) (string, error) {
+	network, err := runtime.Network().NetworkInspect(nameOrID)
+	if err != nil {
+		return "", err
+	}
+	ctrs, err := runtime.GetAllContainers()
+	if err != nil {
+		return "", err
+	}
+	var stopped []*libpod.Container
+	for _, ctr := range ctrs {
+		networks, err := ctr.Networks()
+		if errors.Is(err, define.ErrNoSuchCtr) || errors.Is(err, define.ErrCtrRemoved) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(networks, network.Name) {
+			continue
+		}
+		state, err := ctr.State()
+		if err != nil {
+			return "", err
+		}
+		switch state {
+		case define.ContainerStateConfigured, define.ContainerStateCreated, define.ContainerStateStopped, define.ContainerStateExited:
+			stopped = append(stopped, ctr)
+		default:
+			return "", fmt.Errorf("error while removing network: network %s id %s has active endpoints%.0w", network.Name, network.ID, define.ErrNetworkInUse)
+		}
+	}
+	for _, ctr := range stopped {
+		// A stopped container still has its network set up until it is
+		// cleaned up, and disconnect would leave it behind.
+		if err := ctr.Cleanup(ctx, true); err != nil && !errors.Is(err, define.ErrCtrStateInvalid) {
+			return "", err
+		}
+		if err := ctr.NetworkDisconnect(ctr.ID(), network.Name, false); err != nil {
+			return "", err
+		}
+	}
+	return network.Name, nil
+}
+
+// checkEndpointSettings rejects the endpoint settings that Podman cannot apply.
+// Static link-local addresses are not supported by the network backend.
+func checkEndpointSettings(endpoint *dockerNetwork.EndpointSettings) error {
+	if endpoint != nil && endpoint.IPAMConfig != nil && len(endpoint.IPAMConfig.LinkLocalIPs) > 0 {
+		return fmt.Errorf("IPAMConfig.LinkLocalIPs is not supported: %w", define.ErrInvalidArg)
+	}
+	return nil
+}
+
 // Connect adds a container to a network
 func Connect(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
@@ -471,13 +700,32 @@ func Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := checkEndpointSettings(netConnect.EndpointConfig); err != nil {
+		utils.Error(w, http.StatusBadRequest, err)
+		return
+	}
+
 	netOpts := nettypes.PerNetworkOptions{}
 
 	name, _ := normalizeNetworkName(runtime, utils.GetName(r))
+	if predefined := findPredefinedNetwork(runtime, name); predefined != nil {
+		if _, err := runtime.LookupContainer(netConnect.Container); err != nil {
+			utils.ContainerNotFound(w, netConnect.Container, err)
+			return
+		}
+		err := errConflictHostNetwork
+		if predefined.Name == "none" {
+			err = errConflictNoNetwork
+		}
+		utils.Error(w, http.StatusBadRequest, err)
+		return
+	}
 	if netConnect.EndpointConfig != nil {
 		if netConnect.EndpointConfig.Aliases != nil {
 			netOpts.Aliases = netConnect.EndpointConfig.Aliases
 		}
+		netOpts.Links = netConnect.EndpointConfig.Links
+		netOpts.Options = netConnect.EndpointConfig.DriverOpts
 
 		if netConnect.EndpointConfig.IPAMConfig != nil {
 			ipam := netConnect.EndpointConfig.IPAMConfig
@@ -537,6 +785,23 @@ func Disconnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name, _ := normalizeNetworkName(runtime, utils.GetName(r))
+	if predefined := findPredefinedNetwork(runtime, name); predefined != nil {
+		ctr, err := runtime.LookupContainer(netDisconnect.Container)
+		if err != nil {
+			utils.Error(w, http.StatusNotFound, err)
+			return
+		}
+		switch {
+		case ctr.NetworkMode() != predefined.Name:
+			utils.Error(w, http.StatusInternalServerError, fmt.Errorf("container %s is not connected to the network %s", ctr.ID(), predefined.Name))
+		case predefined.Name == "host":
+			utils.Error(w, http.StatusBadRequest, errConflictHostNetwork)
+		default:
+			// Podman can't change the network mode of a container.
+			utils.Error(w, http.StatusBadRequest, fmt.Errorf("container %s cannot be disconnected from network %s: %w", ctr.ID(), predefined.Name, define.ErrNetworkModeInvalid))
+		}
+		return
+	}
 	err := runtime.DisconnectContainerFromNetwork(netDisconnect.Container, name, netDisconnect.Force)
 	if err != nil {
 		if errors.Is(err, define.ErrNoSuchCtr) {

@@ -79,11 +79,14 @@ func (e *Event) toHumanReadable(truncate bool, omitTime bool) string {
 		}
 		humanFormat += ")"
 	case Network:
-		if e.Status == Create || e.Status == Remove {
+		switch e.Status {
+		case Create, Remove:
 			if netdriver, exists := e.Attributes["driver"]; exists {
 				humanFormat = fmt.Sprintf("%s %s (name=%s, type=%s)", prefix, e.ID, e.Network, netdriver)
 			}
-		} else {
+		case Prune:
+			humanFormat = prefix
+		default:
 			humanFormat = fmt.Sprintf("%s %s (container=%s, name=%s)", prefix, id, id, e.Network)
 		}
 	case Image, Artifact:
@@ -91,13 +94,13 @@ func (e *Event) toHumanReadable(truncate bool, omitTime bool) string {
 		if e.Error != "" {
 			humanFormat += " " + e.Error
 		}
-	case System:
+	case System, Volume:
 		if e.Name != "" {
 			humanFormat = fmt.Sprintf("%s %s", prefix, e.Name)
 		} else {
 			humanFormat = prefix
 		}
-	case Machine, Volume:
+	case Machine:
 		humanFormat = fmt.Sprintf("%s %s", prefix, e.Name)
 	case Secret:
 		humanFormat = fmt.Sprintf("%s %s", prefix, id)

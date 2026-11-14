@@ -701,6 +701,12 @@ type RemoveImagesOptions struct {
 	WithSize bool
 	// NoPrune will not remove dangling images
 	NoPrune bool
+	// UntagInUse is meant for Docker-compatible removal.  If set, and
+	// RemoveContainerFunc returns an error wrapping
+	// storage.ErrImageUsedByContainer for an image specified by name (not
+	// by ID or digest), the name is untagged and the image is kept instead
+	// of reporting the error.
+	UntagInUse bool
 }
 
 // RemoveImages removes images specified by names.  If no names are specified,

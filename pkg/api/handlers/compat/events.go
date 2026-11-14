@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	jsoniter "github.com/json-iterator/go"
+	dockerEvents "github.com/moby/moby/api/types/events"
 	"github.com/sirupsen/logrus"
 	"go.podman.io/podman/v6/libpod"
 	"go.podman.io/podman/v6/libpod/events"
@@ -16,6 +17,66 @@ import (
 	"go.podman.io/podman/v6/pkg/domain/entities"
 	"go.podman.io/podman/v6/pkg/util"
 )
+
+// toDockerNetworkEvent rewrites a network event the way Docker reports it.
+// The actor is the network, with only its name and driver as attributes, and
+// connect and disconnect events add the container. Docker calls a removal
+// "destroy", and reports a prune as a whole, with no reclaimed space.
+func toDockerNetworkEvent(libpodEvent *events.Event, e *entities.Event) {
+	attributes := map[string]string{
+		"name": libpodEvent.Network,
+		"type": libpodEvent.Attributes["driver"],
+	}
+	switch libpodEvent.Status {
+	case events.NetworkConnect, events.NetworkDisconnect:
+		attributes["container"] = libpodEvent.ID
+		e.Actor.ID = libpodEvent.Attributes["networkId"]
+	case events.Remove:
+		e.Action = "destroy"
+	case events.Prune:
+		attributes = map[string]string{"reclaimed": "0"}
+	}
+	e.Actor.Attributes = attributes
+	// Docker sets the deprecated fields only on container and image events.
+	e.Status = "" //nolint:staticcheck // deprecated field
+	e.ID = ""     //nolint:staticcheck // deprecated field
+	e.From = ""   //nolint:staticcheck // deprecated field
+}
+
+// toDockerVolumeEvent rewrites a volume event the way Docker reports it. The
+// actor is the volume name, with only its driver as attribute, and mount and
+// unmount events add the container and, on mount, where and how the volume is
+// mounted. Docker calls a removal "destroy", and reports a prune only as a
+// whole, with the reclaimed space. It returns false for an event that Docker
+// does not write.
+func toDockerVolumeEvent(libpodEvent *events.Event, e *entities.Event) bool {
+	attributes := map[string]string{"driver": libpodEvent.Attributes["driver"]}
+	switch libpodEvent.Status {
+	case events.Mount:
+		attributes["container"] = libpodEvent.Attributes["container"]
+		attributes["destination"] = libpodEvent.Attributes["destination"]
+		attributes["read/write"] = libpodEvent.Attributes["read/write"]
+		// Docker does not support a propagation mode on volume mounts.
+		attributes["propagation"] = ""
+	case events.Unmount:
+		attributes["container"] = libpodEvent.Attributes["container"]
+	case events.Remove:
+		e.Action = "destroy"
+	case events.Prune:
+		// A pruned volume already has its removal event.
+		if libpodEvent.Name != "" {
+			return false
+		}
+		attributes = map[string]string{"reclaimed": libpodEvent.Attributes["reclaimed"]}
+	}
+	e.Actor.ID = libpodEvent.Name
+	e.Actor.Attributes = attributes
+	// Docker sets the deprecated fields only on container and image events.
+	e.Status = "" //nolint:staticcheck // deprecated field
+	e.ID = ""     //nolint:staticcheck // deprecated field
+	e.From = ""   //nolint:staticcheck // deprecated field
+	return true
+}
 
 // GetEvents endpoint serves both the docker-compatible one and the new libpod one
 func GetEvents(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +166,32 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 				e.Status = "die" //nolint:staticcheck // deprecated field
 				e.Action = "die"
 				e.Actor.Attributes["exitCode"] = e.Actor.Attributes["containerExitCode"]
+			}
+			if !utils.IsLibpodRequest(r) {
+				if e.Action == "exec_died" {
+					e.Actor.Attributes["exitCode"] = e.Actor.Attributes["containerExitCode"]
+				}
+				// Docker has no pods and reports exit codes only as "exitCode"
+				// on die and exec_die events.
+				delete(e.Actor.Attributes, "podId")
+				delete(e.Actor.Attributes, "containerExitCode")
+				// Docker reports a health check only when it changes the
+				// health status, with the status in the action.
+				if evt.Event.Status == events.HealthStatus {
+					if !evt.Event.HealthStatusChanged {
+						continue
+					}
+					e.Action = dockerEvents.Action(string(events.HealthStatus) + ": " + evt.Event.HealthStatus)
+					e.Status = string(e.Action) //nolint:staticcheck // deprecated field
+				}
+				switch evt.Event.Type {
+				case events.Network:
+					toDockerNetworkEvent(evt.Event, e)
+				case events.Volume:
+					if !toDockerVolumeEvent(evt.Event, e) {
+						continue
+					}
+				}
 			}
 
 			// Remove fields which are not set in 1.52 and newer.

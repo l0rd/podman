@@ -39,8 +39,14 @@ type Params struct {
 	// Optional.
 	ContainerIPs HostEntries
 	// HostContainersInternalIP is the IP for the host.containers.internal entry.
+	// It is also used to replace host-gateway in ExtraHosts.
 	// Optional.
 	HostContainersInternalIP string
+	// NoHostContainersInternalEntry disables the host.containers.internal and
+	// host.docker.internal entry, HostContainersInternalIP is still used for
+	// host-gateway in ExtraHosts.
+	// Optional.
+	NoHostContainersInternalEntry bool
 	// TargetFile where the hosts are written to.
 	TargetFile string
 }
@@ -119,7 +125,7 @@ func newHost(params *Params) error {
 	l1 := HostEntry{IP: "127.0.0.1", Names: lh}
 	l2 := HostEntry{IP: "::1", Names: lh}
 	containerIPs = append(containerIPs, l1, l2)
-	if params.HostContainersInternalIP != "" {
+	if params.HostContainersInternalIP != "" && !params.NoHostContainersInternalEntry {
 		e := HostEntry{IP: params.HostContainersInternalIP, Names: []string{HostContainersInternal, hostDockerInternal}}
 		containerIPs = append(containerIPs, e)
 	}

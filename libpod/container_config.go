@@ -3,6 +3,7 @@
 package libpod
 
 import (
+	stdjson "encoding/json"
 	"net"
 	"time"
 
@@ -293,6 +294,9 @@ type ContainerNetworkConfig struct {
 	// Hosts to add in container
 	// Will be appended to host's host file
 	HostAdd []string `json:"hostsAdd,omitempty"`
+	// NoHostContainersInternalEntry indicates that the host.containers.internal
+	// and host.docker.internal entry is not added to /etc/hosts.
+	NoHostContainersInternalEntry bool `json:"noHostContainersInternalEntry,omitempty"`
 	// Network names with the network specific options.
 	// Please note that these can be altered at runtime. The actual list is
 	// stored in the DB and should be retrieved from there via c.networks()
@@ -330,6 +334,12 @@ type ContainerImageConfig struct {
 	// image that is created, and for triggering some OCI hooks which do not
 	// fire unless user-added volume mounts are present.
 	UserVolumes []string `json:"userVolumes,omitempty"`
+	// CompatMounts is the HostConfig.Mounts list of the Docker API create
+	// request, encoded as Docker API JSON, reported back by the
+	// Docker-compatible inspect. It is not used in spec generation.
+	// Empty if the container was not created through the Docker API or
+	// the request had no HostConfig.Mounts.
+	CompatMounts stdjson.RawMessage `json:"compatMounts,omitempty"`
 	// Entrypoint is the container's entrypoint.
 	// It is not used in spec generation, but will be used when the
 	// container is committed to populate the entrypoint of the new image.
@@ -352,6 +362,10 @@ type ContainerMiscConfig struct {
 	StopSignal uint `json:"stopSignal,omitempty"`
 	// StopTimeout is maximum time a container is allowed to run after getting the stop signal
 	StopTimeout uint `json:"stopTimeout,omitempty"`
+	// DefaultStopTimeout is true when no stop timeout was given at
+	// creation and StopTimeout holds the engine default. When false,
+	// StopTimeout may have been given explicitly or set to the default.
+	DefaultStopTimeout bool `json:"defaultStopTimeout,omitempty"`
 	// Timeout is maximum time a container will run before getting the kill signal
 	Timeout uint `json:"timeout,omitempty"`
 	// Time container was created

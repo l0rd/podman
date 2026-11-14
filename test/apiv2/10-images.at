@@ -50,6 +50,12 @@ t GET /v1.43/images/json 200 \
 t GET /v1.44/images/json 200 \
   .[0].VirtualSize=null
 
+# digests=true must return the normal list, RepoDigests is always included
+t GET images/json?digests=true 200 \
+  length=1 \
+  .[0].Id=sha256:$iid \
+  .[0].RepoDigests[0]~.*@sha256:[0-9a-f]\\{64\\}
+
 # Negative test case
 t GET images/json?filter=nonesuch 200 length=0
 
@@ -100,6 +106,18 @@ t GET /v1.44/images/$iid/json 200 \
 t GET /v1.45/images/$iid/json 200 \
   .ContainerConfig=null
 
+# Config.Healthcheck of a docker-format image
+printf "FROM $IMAGE\nHEALTHCHECK --interval=1s --timeout=3s --start-period=2s --retries=4 CMD true\n" | \
+    podman build --format docker -t localhost/healthcheck:latest -
+t GET images/localhost/healthcheck:latest/json 200 \
+  .Config.Healthcheck.Test[0]=CMD-SHELL \
+  .Config.Healthcheck.Test[1]=true \
+  .Config.Healthcheck.Interval=1000000000 \
+  .Config.Healthcheck.Timeout=3000000000 \
+  .Config.Healthcheck.StartPeriod=2000000000 \
+  .Config.Healthcheck.Retries=4
+podman rmi localhost/healthcheck:latest
+
 # Create a modified image with the Created field removed.
 NOCREATED=$(mktemp -d podman-apiv2-test.nocreated.XXXXXXXX)
 podman save --format docker-archive -o $NOCREATED/img.tar $IMAGE
@@ -122,7 +140,7 @@ t GET /v1.43/images/localhost/nocreated:latest/json 200 .Created="0001-01-01T00:
 podman rmi -f localhost/nocreated:latest
 rm -rf $NOCREATED
 
-t POST "images/create?fromImage=alpine" 200 .error~null .status~".*Download complete.*"
+t POST "images/create?fromImage=alpine&tag=latest" 200 .error~null .status~".*Download complete.*"
 t POST "libpod/images/pull?reference=alpine&compatMode=true" 200 .error~null .status~".*Download complete.*"
 
 t POST "images/create?fromImage=alpine&tag=latest" 200 \
@@ -138,7 +156,7 @@ t GET  "images/testimage:20221018/json" 200 \
 old_iid=$(podman image inspect --format "{{.ID}}" docker.io/library/alpine:latest)
 podman rmi -f docker.io/library/alpine:latest
 podman tag $IMAGE docker.io/library/alpine:latest
-t POST "images/create?fromImage=alpine" 200 .error~null .status~".*$old_iid.*"
+t POST "images/create?fromImage=alpine&tag=latest" 200 .error~null .status~".*$old_iid.*"
 podman untag docker.io/library/alpine:latest
 
 t POST "images/create?fromImage=quay.io/libpod/alpine&tag=sha256:fa93b01658e3a5a1686dc3ae55f170d8de487006fb53a28efcd12ab0710a2e5f" 200
@@ -222,12 +240,18 @@ t GET images/json?filters='garb1age}' 500 \
     .cause="invalid character 'g' looking for beginning of value"
 t GET images/json?filters='{"label":["testl' 500 \
     .cause="unexpected end of JSON input"
+# Docker: 400 "invalid filter 'color'"
+t GET images/json?filters='{"color":["blue"]}' 400 \
+    .cause="unknown filter" \
+    .message~'.*"color".*'
 
 #libpod api list images sanity checks
 t GET libpod/images/json?filters='garb1age}' 500 \
     .cause="invalid character 'g' looking for beginning of value"
 t GET libpod/images/json?filters='{"label":["testl' 500 \
     .cause="unexpected end of JSON input"
+t GET libpod/images/json?filters='{"color":["blue"]}' 400 \
+    .cause="unknown filter"
 
 # Prune images - bad all input
 t POST libpod/images/prune?all='garb1age' 500 \
@@ -307,7 +331,10 @@ podman create --name test1 test1 echo hi
 
 t DELETE images/test1:latest 409
 podman rm test1
-t DELETE images/test1:latest 200
+t GET images/test1:latest/json 200
+test1_iid=$(jq -r '.Id' <<<"$output")
+# Docker lists the untagged names first, then the deleted IDs as digests.
+t DELETE images/test1:latest 200   length=2   .[0].Untagged~".*test1:latest"   .[1].Deleted="$test1_iid"
 
 t GET "images/get?names=alpine" 200 '[POSIX tar archive]'
 
@@ -326,16 +353,29 @@ EOF
 
 # Create running container
 podman run --rm -d --name test_container docker.io/library/test1:latest top
+t GET images/test1:latest/json 200
+test1_iid=$(jq -r '.Id' <<<"$output")
 
 # When using the Docker Compat API, force deleting an image
 # shouldn't force delete any container using the image, only
 # containers in a non running state should be removed.
 # https://github.com/containers/podman/issues/25871
-t DELETE images/test1:latest?force=true 409
+t DELETE images/test1:latest 409
+t DELETE images/$test1_iid?force=true 409
+
+# Docker: force deleting a running container's image by name
+# only untags that name, even the last one, and keeps the image.
+podman tag test1:latest docker.io/library/test1:other
+t DELETE images/test1:latest?force=true 200 length=1 \
+    .[0].Untagged=docker.io/library/test1:latest
+t DELETE images/test1:other?force=true 200 length=1 \
+    .[0].Untagged=docker.io/library/test1:other
+t GET images/$test1_iid/json 200 .RepoTags=[]
+t GET containers/test_container/json 200 .State.Running=true
 
 # When using the Podman Libpod API, deleting an image
 # with a running container will fail.
-t DELETE libpod/images/test1:latest 409
+t DELETE libpod/images/$test1_iid 409
 
 # When using the Podman Libpod API, force deleting an
 # image will also force delete all containers using the image.
@@ -344,7 +384,7 @@ t DELETE libpod/images/test1:latest 409
 t GET libpod/containers/test_container/exists 204
 
 # Delete image with force.
-t DELETE libpod/images/test1:latest?force=true 200
+t DELETE libpod/images/$test1_iid?force=true 200
 
 # Verify container also removed.
 t GET libpod/containers/test_container/exists 404
@@ -413,12 +453,24 @@ t POST libpod/images/prune 200
 t POST libpod/images/prune 200 length=0 []
 
 # compat api must allow loading tar which contain multiple images
+# with one message per image, docker.io names in familiar form, and
+# "Loaded image ID:" for an entry without a name
 podman pull quay.io/libpod/alpine:latest quay.io/libpod/busybox:latest
-podman save -o ${TMPD}/test.tar quay.io/libpod/alpine:latest quay.io/libpod/busybox:latest
+podman tag quay.io/libpod/busybox:latest docker.io/library/busybox-load:test
+podman save -o ${TMPD}/test.tar quay.io/libpod/alpine:latest docker.io/library/busybox-load:test
+podman rmi docker.io/library/busybox-load:test
 t POST "images/load" ${TMPD}/test.tar 200 \
-  .stream="Loaded image: quay.io/libpod/busybox:latest,quay.io/libpod/alpine:latest"
+  '.stream|select(contains("alpine"))|@json="Loaded image: quay.io/libpod/alpine:latest\n"' \
+  '.stream|select(contains("busybox"))|@json="Loaded image: busybox-load:test\n"'
 t GET libpod/images/quay.io/libpod/alpine:latest/exists  204
-t GET libpod/images/quay.io/libpod/busybox:latest/exists  204
+t GET libpod/images/docker.io/library/busybox-load:test/exists  204
+podman rmi docker.io/library/busybox-load:test
+
+t GET libpod/images/quay.io/libpod/alpine:latest/json 200
+alpine_iid=$(jq -r .Id <<<"$output")
+podman save -o ${TMPD}/test-id.tar $alpine_iid
+t POST "images/load" ${TMPD}/test-id.tar 200 \
+  ".stream|@json=\"Loaded image ID: sha256:$alpine_iid\\n\""
 
 CONTAINERFILE_WITH_ERR_TAR="${TMPD}/containerfile.tar"
 cat > $TMPD/containerfile << EOF

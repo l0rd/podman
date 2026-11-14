@@ -22,15 +22,24 @@ t GET "libpod/events?stream=false&since=$START" 200 \
     'select(.status | contains("start")).Action=start' \
     'select(.status | contains("start")).HealthStatus=null'\
 
-# compat api, uses status=die (#12643)
-t GET "events?stream=false&since=$START"  200  \
-  'select(.status | contains("start")).Action=start' \
-  'select(.status | contains("die")).Action=die' \
-  'select(.status | contains("die")).Actor.Attributes.exitCode=1'
-
-t GET "events?stream=false&since=$START&type=remove"  200  \
+t GET "libpod/events?stream=false&since=$START&type=remove"  200  \
   'select(.status | contains("remove")).Action=remove' \
   'select(.status | contains("remove")).Actor.Attributes.containerExitCode=1'
+
+# compat api, uses status=die (#12643)
+# podId and containerExitCode are libpod-only attributes
+# the container also produces network events, which have no status
+t GET "events?stream=false&since=$START"  200  \
+  'select(.status // "" | contains("start")).Action=start' \
+  'select(.status // "" | contains("start")).Actor.Attributes.podId=null' \
+  'select(.status // "" | contains("die")).Action=die' \
+  'select(.status // "" | contains("die")).Actor.Attributes.exitCode=1' \
+  'select(.status // "" | contains("die")).Actor.Attributes.containerExitCode=null' \
+  'select(.status // "" | contains("die")).Actor.Attributes.podId=null'
+
+t GET "events?stream=false&since=$START&type=remove"  200  \
+  'select(.status // "" | contains("remove")).Action=remove' \
+  'select(.status // "" | contains("remove")).Actor.Attributes.containerExitCode=null'
 
 # compat api does not contain .status for v1.52 and newer
 t GET "/v1.52/events?stream=false&since=$START" 200 \
@@ -38,6 +47,97 @@ t GET "/v1.52/events?stream=false&since=$START" 200 \
 
 t GET "/v1.52/events?stream=false&since=$START&type=remove" 200 \
   'select(has("status"))|.status='
+
+# compat network events: the actor is the network, with its name and driver,
+# and the container connects and disconnects when it starts and stops
+START=$(date +%s.%N)
+net=events-net-$(random_string 8)
+podman network create $net
+podman create --name events-net-ctr --network $net $IMAGE true
+t GET networks/$net 200
+netid=$(jq -r .Id <<<"$output")
+t GET containers/events-net-ctr/json 200
+cid=$(jq -r .Id <<<"$output")
+podman start --attach events-net-ctr
+podman rm events-net-ctr
+podman network rm $net
+podman network prune -f --filter label=events-net-nomatch
+
+t GET "events?stream=false&since=$START&filters=%7B%22network%22%3A%5B%22$net%22%5D%7D" 200
+is "$(jq -c '[.Action, .Actor.ID, .Actor.Attributes, has("status")]' <<<"$output")" \
+   "[\"create\",\"$netid\",{\"name\":\"$net\",\"type\":\"bridge\"},false]
+[\"connect\",\"$netid\",{\"container\":\"$cid\",\"name\":\"$net\",\"type\":\"bridge\"},false]
+[\"disconnect\",\"$netid\",{\"container\":\"$cid\",\"name\":\"$net\",\"type\":\"bridge\"},false]
+[\"destroy\",\"$netid\",{\"name\":\"$net\",\"type\":\"bridge\"},false]" \
+   "compat network events"
+
+# a prune is reported as a whole, even when it removed nothing
+t GET "events?stream=false&since=$START&filters=%7B%22type%22%3A%5B%22network%22%5D%2C%22event%22%3A%5B%22prune%22%5D%7D" 200 \
+  .Action=prune \
+  .Actor.ID= \
+  '.Actor.Attributes|tojson={"reclaimed":"0"}'
+
+# the libpod endpoint keeps reporting the container as the actor
+t GET "libpod/events?stream=false&since=$START&filters=%7B%22network%22%3A%5B%22$net%22%5D%2C%22event%22%3A%5B%22connect%22%5D%7D" 200 \
+  .Actor.ID=$cid \
+  .Actor.Attributes.network=$net
+
+# compat volume events: the actor is the volume name, with its driver, and the
+# container mounts and unmounts the volume when it starts and stops
+START=$(date +%s.%N)
+vol=events-vol-$(random_string 8)
+podman volume create --label events-vol-label=1 $vol
+podman create --name events-vol-ctr -v $vol:/data $IMAGE sh -c 'head -c 4096 /dev/zero >/data/file'
+t GET containers/events-vol-ctr/json 200
+cid=$(jq -r .Id <<<"$output")
+podman start --attach events-vol-ctr
+podman rm events-vol-ctr
+t POST "volumes/prune?filters=%7B%22all%22%3A%5B%22true%22%5D%2C%22label%22%3A%5B%22events-vol-label%22%5D%7D" 200 \
+  .VolumesDeleted[0]=$vol
+reclaimed=$(jq -r .SpaceReclaimed <<<"$output")
+t POST "volumes/prune?filters=%7B%22all%22%3A%5B%22true%22%5D%2C%22label%22%3A%5B%22events-vol-label%22%5D%7D" 200 \
+  .SpaceReclaimed=0
+
+t GET "events?stream=false&since=$START&filters=%7B%22volume%22%3A%5B%22$vol%22%5D%7D" 200
+is "$(jq -c '[.Action, .Actor.ID, .Actor.Attributes, has("status")]' <<<"$output")" \
+   "[\"create\",\"$vol\",{\"driver\":\"local\"},false]
+[\"mount\",\"$vol\",{\"container\":\"$cid\",\"destination\":\"/data\",\"driver\":\"local\",\"propagation\":\"\",\"read/write\":\"true\"},false]
+[\"unmount\",\"$vol\",{\"container\":\"$cid\",\"driver\":\"local\"},false]
+[\"destroy\",\"$vol\",{\"driver\":\"local\"},false]" \
+   "compat volume events"
+
+# a prune is reported as a whole, with the space it reclaimed, even when it
+# removed nothing
+t GET "events?stream=false&since=$START&filters=%7B%22type%22%3A%5B%22volume%22%5D%2C%22event%22%3A%5B%22prune%22%5D%7D" 200
+is "$(jq -c '[.Actor.ID, .Actor.Attributes]' <<<"$output")" \
+   "[\"\",{\"reclaimed\":\"$reclaimed\"}]
+[\"\",{\"reclaimed\":\"0\"}]" \
+   "compat volume prune events"
+
+# the libpod endpoint keeps the volume labels and reports each pruned volume
+t GET "libpod/events?stream=false&since=$START&filters=%7B%22volume%22%3A%5B%22$vol%22%5D%2C%22event%22%3A%5B%22prune%22%5D%7D" 200 \
+  .Actor.Attributes.name=$vol \
+  '.Actor.Attributes["events-vol-label"]=1'
+
+# compat health events report the status in the action, like Docker, and can
+# be filtered by it. Like Docker, they are only reported when the status
+# changes: the second check, still healthy, has no compat event.
+START=$(date +%s.%N)
+podman run -d --name events-hc-ctr --health-cmd true --health-interval disable $IMAGE top
+podman healthcheck run events-hc-ctr
+podman healthcheck run events-hc-ctr
+t GET "events?stream=false&since=$START&filters=%7B%22event%22%3A%5B%22health_status%3A%20healthy%22%5D%7D" 200 \
+  '.Action=health_status: healthy' \
+  .Actor.Attributes.name=events-hc-ctr
+t GET "events?stream=false&since=$START&filters=%7B%22event%22%3A%5B%22health_status%3A%20unhealthy%22%5D%7D" 200
+is "$output" "" "no unhealthy events"
+t GET "events?stream=false&since=$START&filters=%7B%22event%22%3A%5B%22health_status%22%5D%7D" 200
+is "$(jq -c .Action <<<"$output")" '"health_status: healthy"' "one compat event, for the change"
+# the libpod endpoint reports every check, with the status separately
+t GET "libpod/events?stream=false&since=$START&filters=%7B%22event%22%3A%5B%22health_status%22%5D%7D" 200
+is "$(jq -c '[.Action, .HealthStatus]' <<<"$output")" '["health_status","healthy"]
+["health_status","healthy"]' "libpod events for both checks"
+podman rm -f -t0 events-hc-ctr
 
 APIV2_TEST_EXPECT_TIMEOUT=1 t GET "events?stream=true" 999
 like "$(<$WORKDIR/curl.headers.out)" ".*HTTP.* 200 OK.*" \

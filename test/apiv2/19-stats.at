@@ -42,6 +42,22 @@ t GET libpod/containers/stopped-stats/stats?stream=false 409 \
     .response=409
 podman rm stopped-stats
 
+# Like Docker, the compat endpoint reports empty stats, with the name and ID,
+# for a single sample of a container that is not running, so that
+# "docker stats --all --no-stream" also lists it. The libpod endpoint keeps
+# reporting the error.
+podman create --name created-stats $IMAGE true
+t GET containers/created-stats/json 200
+cid=$(jq -r .Id <<<"$output")
+t GET containers/created-stats/stats?stream=false 200 \
+    .name=created-stats \
+    .id=$cid \
+    .read=0001-01-01T00:00:00Z \
+    .cpu_stats.cpu_usage.total_usage=0 \
+    .memory_stats.usage=null
+t GET libpod/containers/created-stats/stats?stream=false 409
+podman rm created-stats
+
 # https://github.com/containers/podman/issues/28761
 podman pod create --name statspod
 podman run -dt --pod statspod --name podctr $IMAGE top &>/dev/null

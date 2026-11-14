@@ -573,6 +573,7 @@ func ConfigToSpec(rt *libpod.Runtime, specg *specgen.SpecGenerator, containerID 
 	specg.ShmSizeSystemd = &conf.ShmSizeSystemd
 	specg.UseImageHostname = &conf.UseImageHostname
 	specg.UseImageHosts = &conf.UseImageHosts
+	specg.NoHostContainersInternalEntry = conf.NoHostContainersInternalEntry
 
 	finalNetworks := make(map[string]types.PerNetworkOptions, len(conf.Networks))
 	finalNetworkOrder := make([]string, 0, len(conf.Networks))

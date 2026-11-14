@@ -143,7 +143,11 @@ func (r *Runtime) teardownNetwork(ctr *Container) error {
 	// netavark Teardown(), so no explicit pesto cleanup is needed here.
 
 	netOpts := ctr.getNetworkOptions(networks)
-	return r.teardownNetworkBackend(ctr.state.NetNS, netOpts)
+	err = r.teardownNetworkBackend(ctr.state.NetNS, netOpts)
+	for _, net := range networks {
+		ctr.newNetworkEvent(events.NetworkDisconnect, net.Name)
+	}
+	return err
 }
 
 // isBridgeNetMode checks if the given network mode is bridge.
@@ -282,6 +286,7 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 				netInfo.NetworkID = getNetworkID(net.Name)
 				netInfo.Aliases = net.Aliases
 				netInfo.DNSNames = c.dnsNamesForNetwork(net.Aliases)
+				setInspectEndpointOptions(netInfo, &net.PerNetworkOptions)
 				settings.Networks[net.Name] = netInfo
 			}
 		} else {
@@ -316,6 +321,7 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 			addedNet.Aliases = network.Aliases
 			addedNet.DNSNames = c.dnsNamesForNetwork(network.Aliases)
 			addedNet.InspectBasicNetworkConfig = resultToBasicNetworkConfig(result)
+			setInspectEndpointOptions(addedNet, &network.PerNetworkOptions)
 
 			settings.Networks[network.Name] = addedNet
 
@@ -344,6 +350,28 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 		}
 	}
 	return settings, nil
+}
+
+// setInspectEndpointOptions fills the endpoint settings of netInfo that the
+// container was created or connected with: the static IPs (as IPAMConfig),
+// the driver options and the links.
+func setInspectEndpointOptions(netInfo *define.InspectAdditionalNetwork, opts *types.PerNetworkOptions) {
+	for _, ip := range opts.StaticIPs {
+		key := "IPv6Address"
+		if ip.To4() != nil {
+			key = "IPv4Address"
+		}
+		if netInfo.IPAMConfig == nil {
+			netInfo.IPAMConfig = make(map[string]string, 2)
+		}
+		if _, ok := netInfo.IPAMConfig[key]; !ok {
+			netInfo.IPAMConfig[key] = ip.String()
+		}
+	}
+	if len(opts.Options) > 0 {
+		netInfo.DriverOpts = opts.Options
+	}
+	netInfo.Links = opts.Links
 }
 
 // resultToBasicNetworkConfig produces an InspectBasicNetworkConfig from a
