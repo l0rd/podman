@@ -455,6 +455,10 @@ func LibpodToContainer(l *libpod.Container, sz bool, includeHealth bool) (*handl
 	if err := json.Unmarshal(n, &networkSettings); err != nil {
 		return nil, err
 	}
+	// Like inspect, report a container without networks with an empty map, not null.
+	if networkSettings.Networks == nil {
+		networkSettings.Networks = map[string]*network.EndpointSettings{}
+	}
 
 	m, err := json.Marshal(inspect.Mounts)
 	if err != nil {

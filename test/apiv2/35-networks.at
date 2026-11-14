@@ -265,4 +265,20 @@ t POST networks/netcon/connect Container=c1 200 OK
 # cleanup
 podman network rm -f netcon
 
+#
+# A container disconnected from its only network has an empty Networks map, not null
+#
+podman network create netnone
+podman run -d --network netnone --name cnetnone $IMAGE top
+t POST networks/netnone/disconnect Container=cnetnone 200 OK
+t GET containers/json?filters='{"name":["cnetnone"]}' 200 \
+  length=1 \
+  .[0].NetworkSettings.Networks={}
+t GET containers/cnetnone/json 200 \
+  .NetworkSettings.Networks={}
+
+# cleanup
+podman rm -f -t0 cnetnone
+podman network rm netnone
+
 # vim: filetype=sh
