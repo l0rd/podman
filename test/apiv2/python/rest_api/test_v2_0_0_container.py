@@ -2,6 +2,7 @@ import io
 import multiprocessing
 import queue
 import random
+import socket
 import subprocess
 import tarfile
 import threading
@@ -120,6 +121,39 @@ class ContainerTestCase(APITestCase):
         self.assertIn(r.status_code, (200, 409), r.text)
         if r.status_code == 200:
             self.assertId(r.content)
+
+    def test_put_archive_half_close(self):
+        # A client may shut down its side of the connection once it has sent
+        # the archive. The upload must still complete, also when the archive
+        # arrives after the request headers.
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            data = b"half-close\n"
+            info = tarfile.TarInfo("half-close.txt")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        body = buf.getvalue()
+
+        cid = self.resolve_container("{}")
+        with socket.create_connection(("localhost", 8080), timeout=30) as s:
+            s.sendall(
+                (
+                    f"PUT /v1.44/containers/{cid}/archive?path=/tmp HTTP/1.1\r\n"
+                    "Host: localhost\r\nContent-Type: application/x-tar\r\n"
+                    f"Content-Length: {len(body)}\r\n\r\n"
+                ).encode()
+            )
+            time.sleep(0.5)
+            s.sendall(body)
+            s.shutdown(socket.SHUT_WR)
+            response = b""
+            while chunk := s.recv(4096):
+                response += chunk
+        status = response.split(b"\r\n", 1)[0]
+        self.assertIn(b" 200 ", status, response)
+
+        r = self.podman.run("exec", cid, "cat", "/tmp/half-close.txt", check=True)
+        self.assertEqual(r.stdout, b"half-close\n")
 
     def test_delete(self):
         r = requests.delete(self.uri(self.resolve_container("/containers/{}?force=true")))

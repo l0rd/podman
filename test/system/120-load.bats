@@ -41,6 +41,34 @@ verify_iid_and_name() {
     is "$new_img_name" "$1"   "Name & tag of restored image"
 }
 
+# image_copy_tmp_dir="storage" points TMPDIR at <graphroot>/tmp, which a new store doesn't have yet.
+@test "podman load - image_copy_tmp_dir=storage with a new store" {
+    skip_if_remote "the server's TMPDIR comes from the server's containers.conf"
+    unset TMPDIR
+
+    archive=$PODMAN_TMPDIR/myimage-$(random_string 8).tar
+    run_podman save -o $archive $IMAGE
+
+    # The "storage" tmp dir is in the graph root from storage.conf.
+    local root=$PODMAN_TMPDIR/newroot
+    local runroot=$PODMAN_TMPDIR/newrunroot
+    printf '[storage]
+driver = "vfs"
+graphroot = "%s"
+runroot = "%s"
+' $root $runroot > $PODMAN_TMPDIR/storage.conf
+    printf '[engine]
+image_copy_tmp_dir = "storage"
+' > $PODMAN_TMPDIR/containers.conf
+    local storeopts="--root $root --runroot $runroot --storage-driver vfs"
+
+    CONTAINERS_STORAGE_CONF=$PODMAN_TMPDIR/storage.conf CONTAINERS_CONF_OVERRIDE=$PODMAN_TMPDIR/containers.conf         run_podman $storeopts load -i $archive
+    assert "$output" =~ "Loaded image: $IMAGE" "load into a new store"
+    assert "$(stat -c %a $root/tmp)" = "700" "<graphroot>/tmp created"
+
+    run_podman $storeopts rmi -a
+}
+
 @test "podman load invalid file" {
     # Regression test for #9672 to make sure invalid input yields errors.
     invalid=$PODMAN_TMPDIR/invalid

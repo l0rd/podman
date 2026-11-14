@@ -1034,6 +1034,26 @@ EOF
     run_podman rmi -f $imgname
 }
 
+# bats test_tags=ci:parallel
+@test "podman build --output to stdout writes only the tar archive" {
+    tmpdir=$PODMAN_TMPDIR/build-test
+    mkdir -p $tmpdir
+    rand_filename=$(random_string 20)
+    cat >$tmpdir/Containerfile <<EOF
+FROM $IMAGE
+RUN echo $(random_string 15) > /$rand_filename && echo RUN output
+EOF
+
+    for output in "-" "type=tar,dest=-"; do
+        "${PODMAN_CMD[@]}" $_PODMAN_TEST_OPTS build --iidfile $tmpdir/iid --output $output $tmpdir \
+            2>$tmpdir/stderr | tar -t >$tmpdir/files
+        assert "${PIPESTATUS[*]}" = "0 0" "build --output $output | tar -t"
+        assert "$(< $tmpdir/files)" =~ "$rand_filename" "build --output $output: file in tar"
+        assert "$(< $tmpdir/stderr)" =~ "STEP 2/2" "build --output $output: build log on stderr"
+        run_podman rmi $(< $tmpdir/iid)
+    done
+}
+
 @test "podman build check_label" {
     skip_if_no_selinux
     tmpdir=$PODMAN_TMPDIR/build-test

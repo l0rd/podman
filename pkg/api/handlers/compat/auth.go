@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/moby/moby/api/types/registry"
@@ -25,15 +26,13 @@ func Auth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	skipTLS := types.NewOptionalBool(false)
-	if strings.HasPrefix(authConfig.ServerAddress, "https://localhost/") || strings.HasPrefix(authConfig.ServerAddress, "https://localhost:") || strings.HasPrefix(authConfig.ServerAddress, "localhost:") {
-		// support for local testing
-		skipTLS = types.NewOptionalBool(true)
-	}
-
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 	sysCtx := runtime.SystemContext()
-	sysCtx.DockerInsecureSkipTLSVerify = skipTLS
+	// TLS verification is configured in registries.conf, but localhost
+	// registries skip it to support local testing.
+	if isLocalhostServerAddress(authConfig.ServerAddress) {
+		sysCtx.DockerInsecureSkipTLSVerify = types.OptionalBoolTrue
+	}
 
 	loginOpts := &auth.LoginOptions{
 		Username:    authConfig.Username,
@@ -61,4 +60,17 @@ func Auth(w http.ResponseWriter, r *http.Request) {
 			Message: "login attempt to " + authConfig.ServerAddress + " failed with status: " + msg,
 		})
 	}
+}
+
+// isLocalhostServerAddress reports whether serverAddress, a bare host[:port]
+// or a URL such as "https://localhost:5000/v2/", names a registry on localhost.
+func isLocalhostServerAddress(serverAddress string) bool {
+	if !strings.Contains(serverAddress, "://") {
+		serverAddress = "//" + serverAddress
+	}
+	u, err := url.Parse(serverAddress)
+	if err != nil {
+		return false
+	}
+	return u.Hostname() == "localhost"
 }
