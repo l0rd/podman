@@ -34,9 +34,10 @@ for proxy in %s; do
 done
 
 systemctl daemon-reload
+systemctl --user -M %s@ daemon-reload
 `
 
-func getProxyScript(isWSL bool) io.Reader {
+func getProxyScript(isWSL bool, remoteUser string) io.Reader {
 	var envs []string
 	for _, key := range config.ProxyEnv {
 		if value, ok := os.LookupEnv(key); ok {
@@ -50,12 +51,12 @@ func getProxyScript(isWSL bool) io.Reader {
 		}
 	}
 
-	script := fmt.Sprintf(proxySetupScriptTemplate, strings.Join(envs, " "))
+	script := fmt.Sprintf(proxySetupScriptTemplate, strings.Join(envs, " "), remoteUser)
 	logrus.Tracef("Final environment variable setup script: %s", script)
 	return strings.NewReader(script)
 }
 
 func ApplyProxies(mc *vmconfigs.MachineConfig) error {
 	return machine.LocalhostSSHWithStdin("root", mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, []string{"/usr/bin/bash"},
-		getProxyScript(mc.WSLHypervisor != nil))
+		getProxyScript(mc.WSLHypervisor != nil, mc.SSH.RemoteUsername))
 }
