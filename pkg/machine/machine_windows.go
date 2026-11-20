@@ -242,6 +242,29 @@ func launchWinProxy(opts WinProxyOpts) (bool, string, error) {
 	})
 }
 
+// StartWinProxy starts win-sshproxy like LaunchWinProxy does, but returns
+// the error instead of printing it, and doesn't print any info.
+func StartWinProxy(opts WinProxyOpts) error {
+	_, _, err := launchWinProxy(opts)
+	return err
+}
+
+// WinProxyPID returns the PID of the win-sshproxy process of a machine, or 0
+// if it isn't running.
+func WinProxyPID(name string, vmtype define.VMType) (int, error) {
+	pid, _, _, err := readWinProxyTid(name, vmtype)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !IsProcessAlive(int(pid)) {
+		return 0, nil
+	}
+	return int(pid), nil
+}
+
 func StopWinProxy(name string, vmtype define.VMType) error {
 	pid, tid, tidFile, err := readWinProxyTid(name, vmtype)
 	if err != nil {

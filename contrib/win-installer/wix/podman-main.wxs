@@ -104,6 +104,36 @@ and other data will be preserved." />
 			Condition="(SKIP_CONFIG_FILE_CREATION = 1) OR (MACHINE_PROVIDER_CONFIG_FILE_PATH) OR (MAIN_EXECUTABLE_FILE_PATH)" />
 
 		<CustomAction Id="OpenGuide" DllEntry="WixShellExec" Impersonate="yes" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+
+		<!--
+			Restart Manager kills the helpers of running machines (win-sshproxy,
+			gvproxy, the 9p server) to replace their executables and nothing
+			restarts them, so running machines lose API forwarding (#30318).
+			StopHelpers stops them gracefully with the installed podman before
+			Restart Manager runs (during InstallValidate). It fails, and is
+			ignored, when the installed podman doesn't have the command.
+			StartHelpers starts the helpers of the running machines with the
+			new podman after the installation, including the ones killed by
+			Restart Manager. Both run as the installing user and never fail
+			the installation.
+		-->
+		<SetProperty Id="WixQuietExecCmdLine"
+				Action="SetStopHelpersCmdLine"
+				Before="StopHelpers"
+				Sequence="execute"
+				Value="&quot;[INSTALLDIR]podman.exe&quot; system helpers stop" />
+		<CustomAction Id="StopHelpers" DllEntry="WixQuietExec" Execute="immediate" Return="ignore" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+		<SetProperty Id="WixQuietExecCmdLine"
+				Action="SetStartHelpersCmdLine"
+				Before="StartHelpers"
+				Sequence="execute"
+				Value="&quot;[#MainExecutableFile]&quot; system helpers start" />
+		<CustomAction Id="StartHelpers" DllEntry="WixQuietExec" Execute="immediate" Return="ignore" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+		<InstallExecuteSequence>
+			<Custom Action="StopHelpers" Before="InstallValidate" Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT (REMOVE~=&quot;ALL&quot;)" />
+			<Custom Action="StartHelpers" After="InstallFinalize" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+		</InstallExecuteSequence>
+
 		<util:BroadcastEnvironmentChange />
 		<Feature Id="Complete" Level="1">
 			<ComponentRef Id="INSTALLDIR_Component" />

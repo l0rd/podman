@@ -221,10 +221,7 @@ func (h HyperVStubber) MountType() vmconfigs.VolumeMountType {
 }
 
 func (h HyperVStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, _ bool) error {
-	var (
-		err        error
-		executable string
-	)
+	var err error
 	callbackFuncs := machine.CleanUp()
 	defer callbackFuncs.CleanIfErr(&err)
 	go callbackFuncs.CleanOnSignal(true)
@@ -233,11 +230,31 @@ func (h HyperVStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, _ bool) err
 		return nil
 	}
 
-	var (
-		dirs       *define.MachineDirs
-		gvproxyPID int
-	)
-	dirs, err = env.GetMachineDirs(h.VMType())
+	// Note: No callback is needed to stop the 9p server, because it will stop when
+	// gvproxy stops
+	if err = startServer9p(mc); err != nil {
+		return err
+	}
+
+	// Finalize starting shares after we are confident gvproxy is still alive.
+	err = startShares(mc)
+	return err
+}
+
+// server9pPIDFile returns the file where the PID of the 9p server of the
+// machine is stored.
+func server9pPIDFile(mc *vmconfigs.MachineConfig) (*define.VMFile, error) {
+	dirs, err := env.GetMachineDirs(define.HyperVVirt)
+	if err != nil {
+		return nil, err
+	}
+	return dirs.RuntimeDir.AppendToNewVMFile(mc.Name+"-server9p.pid", nil)
+}
+
+// startServer9p starts the 9p server that serves the machine mounts and
+// records its PID. The server stops when gvproxy stops.
+func startServer9p(mc *vmconfigs.MachineConfig) error {
+	dirs, err := env.GetMachineDirs(define.HyperVVirt)
 	if err != nil {
 		return err
 	}
@@ -246,12 +263,12 @@ func (h HyperVStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, _ bool) err
 	if err != nil {
 		return err
 	}
-	gvproxyPID, err = gvproxyPIDFile.ReadPIDFrom()
+	gvproxyPID, err := gvproxyPIDFile.ReadPIDFrom()
 	if err != nil {
 		return err
 	}
 
-	executable, err = os.Executable()
+	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
@@ -288,18 +305,19 @@ func (h HyperVStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, _ bool) err
 		defer log.Close()
 	}
 
-	err = fsCmd.Start()
-	if err != nil {
+	if err := fsCmd.Start(); err != nil {
 		return fmt.Errorf("unable to start 9p server: %w", err)
 	}
 	logrus.Infof("Started podman 9p server as PID %d", fsCmd.Process.Pid)
 
-	// Note: No callback is needed to stop the 9p server, because it will stop when
-	// gvproxy stops
-
-	// Finalize starting shares after we are confident gvproxy is still alive.
-	err = startShares(mc)
-	return err
+	pidFile, err := server9pPIDFile(mc)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(pidFile.GetPath(), fmt.Appendf(nil, "%d", fsCmd.Process.Pid), 0o644); err != nil {
+		logrus.Warnf("unable to write 9p server PID file: %v", err)
+	}
+	return nil
 }
 
 func (h HyperVStubber) Remove(mc *vmconfigs.MachineConfig) ([]string, func() error, error) {

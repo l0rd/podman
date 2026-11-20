@@ -112,3 +112,12 @@ func waitOnProcess(processID int) error {
 func removeGVProxyPIDFile(f define.VMFile) error {
 	return f.Delete()
 }
+
+// IsProcessAlive reports whether a process with the given PID exists.
+func IsProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := unix.Kill(pid, 0)
+	return err == nil || errors.Is(err, unix.EPERM)
+}
